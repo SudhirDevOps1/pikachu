@@ -387,10 +387,16 @@ export function useAssistant() {
         store.getState().finalizeMessage(curId);
         store.getState().setAiThinking(false);
         const msgObj = store.getState().messages.find((m) => m.id === curId);
-        const textToSpeak = (msgObj?.content || "") + (msg.chunk || "");
-        if (textToSpeak.trim()) {
-          const cleanText = textToSpeak.replace(/[*#`_~]/g, "").replace(/\n+/g, " ").trim();
-          triggerTTS(cleanText);
+        const fullText = (msgObj?.content || "") + (msg.chunk || "");
+        if (fullText.trim()) {
+          // Clean markdown, limit to first 300 chars so TTS doesn't read entire long response
+          const cleanText = fullText
+            .replace(/[*#`_~>\[\]]/g, "")
+            .replace(/https?:\/\/\S+/g, "")
+            .replace(/\n+/g, " ")
+            .trim()
+            .slice(0, 300);
+          if (cleanText) triggerTTS(cleanText);
         }
         streamId.current = null;
       } else {
@@ -408,7 +414,8 @@ export function useAssistant() {
         store.getState().setApiHealth(p, res);
       }
     } else if ((msg as any).type === "response") {
-      // Data came back from the bridge → populate the store
+      // Data came back from the bridge → populate the store (UI only, NO TTS here)
+      // TTS is handled by: processInput→triggerTTS (commands) and llm_stream done→triggerTTS (LLM)
       const data = msg.data as any;
       if (data && Array.isArray(data.drives)) {
         store.getState().setDrives(data.drives);
@@ -419,19 +426,11 @@ export function useAssistant() {
       if (msg.status === "error") {
         store.getState().addToast({ type: "error", message: msg.message });
       } else if (msg.message) {
-        // Deduplicate: check if the last spoken text was the same or very similar within 4 seconds
-        const now = Date.now();
-        const lastSpoken = lastSpokenRef.current;
-        const msgShort = msg.message.slice(0, 40);
-        const isSame = lastSpoken.text.includes(msgShort) || msg.message.includes(lastSpoken.text.slice(0, 40));
-        const isRecent = now - lastSpoken.time < 4000;
-        if (!(isSame && isRecent)) {
-          streamText(msg.message, "pika");
-          triggerTTS(msg.message);
-        }
+        // Only show in UI — do NOT call triggerTTS (would double-speak with processInput's TTS)
+        streamText(msg.message, "pika");
       }
     }
-  }, [store, processInput, streamText, triggerTTS]);
+  }, [store, processInput, streamText]);
 
   const connect = useCallback(() => {
     const url = store.getState().settings.bridgeUrl;
