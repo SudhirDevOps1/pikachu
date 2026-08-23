@@ -363,6 +363,20 @@ def err(msg: str):
     return {"success": False, "message": msg, "data": None}
 
 
+def envelope(req_id: str, status: str, message: str, data=None, confirmation_id=None) -> str:
+    payload = {
+        "type": "response",
+        "status": status,
+        "message": message,
+        "data": data,
+        "id": req_id,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    if confirmation_id:
+        payload["confirmation_id"] = confirmation_id
+    return json.dumps(payload)
+
+
 def run(cmd, shell=False, timeout=15):
     return subprocess.run(cmd, shell=shell, capture_output=True, text=True, timeout=timeout)
 
@@ -1989,6 +2003,33 @@ async def handle_agent_action(ws, msg):
         "done": True, 
         "id": conv_id
     }))
+
+
+async def status_loop(ws):
+    """Periodically sends live CPU, RAM, and Battery telemetry to connected clients."""
+    try:
+        while True:
+            await asyncio.sleep(2)
+            try:
+                info = {}
+                if psutil:
+                    info["cpu"] = psutil.cpu_percent()
+                    info["ram"] = psutil.virtual_memory().percent
+                    battery = psutil.sensors_battery()
+                    info["battery"] = {"percent": battery.percent, "plugged": battery.power_plugged} if battery else None
+                await ws.send(json.dumps({
+                    "type": "event",
+                    "event": "system_status",
+                    "data": info,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }))
+            except Exception:
+                break
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
 
 async def handle_client(ws):
     client = f"{ws.remote_address[0]}:{ws.remote_address[1]}"
