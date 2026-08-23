@@ -27,6 +27,7 @@ export function useAssistant() {
   const reconnectTimer = useRef<number | null>(null);
   const streamId = useRef<string | null>(null);
   const lastSpokenRef = useRef<{ text: string; time: number }>({ text: "", time: 0 });
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const store = useStore;
 
@@ -34,6 +35,10 @@ export function useAssistant() {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     try {
       window.speechSynthesis.cancel();
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
       const clean = text.replace(/[*_`#\>\[\]]/g, "").replace(/https?:\/\/\S+/g, "").trim();
       if (!clean) return;
       const u = new SpeechSynthesisUtterance(clean);
@@ -68,11 +73,24 @@ export function useAssistant() {
       const clean = text.trim();
       if (!clean) return;
       const now = Date.now();
-      // Prevent repeating the exact same utterance within 3.5 seconds
-      if (lastSpokenRef.current.text === clean && now - lastSpokenRef.current.time < 3500) {
+      // Prevent repeating utterance within 6 seconds
+      if (
+        (lastSpokenRef.current.text === clean ||
+          (clean.length > 20 && lastSpokenRef.current.text.startsWith(clean.slice(0, 30)))) &&
+        now - lastSpokenRef.current.time < 6000
+      ) {
         return;
       }
       lastSpokenRef.current = { text: clean, time: now };
+
+      // Stop previous audio playback & browser speech synthesis immediately
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
 
       const ttsEngine = store.getState().settings.ttsEngine || "edge";
       if (ttsEngine === "none") return;
@@ -310,13 +328,24 @@ export function useAssistant() {
           }
           break;
         case "tts_audio": {
-          // Backend sent base64 audio (Edge TTS mp3 / pyttsx3 wav) — play it
+          // Backend sent base64 audio (Edge TTS mp3 / piper wav) — play it
           try {
+            if (typeof window !== "undefined" && "speechSynthesis" in window) {
+              window.speechSynthesis.cancel();
+            }
+            if (currentAudioRef.current) {
+              currentAudioRef.current.pause();
+              currentAudioRef.current = null;
+            }
             const d = msg.data as { audio: string; format: string };
             const mime = (d.format && d.format.includes("wav")) ? "audio/wav" : "audio/mpeg";
             const audio = new Audio(`data:${mime};base64,${d.audio}`);
+            currentAudioRef.current = audio;
             store.getState().setSpeaking(true);
-            audio.onended = () => store.getState().setSpeaking(false);
+            audio.onended = () => {
+              store.getState().setSpeaking(false);
+              currentAudioRef.current = null;
+            };
             audio.play().catch((err) => {
               console.warn("Audio play rejected:", err);
               store.getState().setSpeaking(false);
