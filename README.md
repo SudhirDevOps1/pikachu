@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-1.1.0-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
+[![Version](https://img.shields.io/badge/version-1.1.1-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg?style=for-the-badge)](LICENSE)
 
 **An open-source, voice-enabled Desktop AI Assistant with local system automation.**
