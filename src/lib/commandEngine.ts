@@ -138,6 +138,14 @@ const RULES: Rule[] = [
   { re: /(.+?)\s*(?:song|gaana|video)?\s*(?:bajao|play karo|play|chalao)\s*(?:youtube|yutub)\s*(?:mein|par|me|pr)/i, handle: (m) => cmd("web","youtube_play",{query:m[1].trim()},`🎵 YouTube पर ${m[1].trim()} चला रहा हूँ...`,{toast:{type:"success",message:`Playing ${m[1].trim()} 🎵`}}) },
   { re: /(?:play|bajao|chalao)\s*(.+?)\s*(?:song|gaana|video)?\s*(?:on|in|par|mein)?\s*(?:youtube|yutub)/i, handle: (m) => cmd("web","youtube_play",{query:m[1].trim()},`🎵 YouTube पर ${m[1].trim()} चला रहा हूँ...`,{toast:{type:"success",message:`Playing ${m[1].trim()} 🎵`}}) },
   { re: /(?:youtube|yutub)\s*(?:search|par)?\s+(.+)/i, handle: (m) => cmd("web","youtube_search",{query:m[1].trim()},`▶️ YouTube: ${m[1].trim()}`) },
+  // Generic: "blue hai pani song bajao" — no youtube word, assume YouTube play
+  { re: /^(.+?)\s+(?:song|gaana|gana|music|gaane)\s+(?:bajao|play karo|play|chalao|chala|suno|sunao|sun)/i, handle: (m) => cmd("web","youtube_play",{query:m[1].trim()},`🎵 YouTube पर "${m[1].trim()}" बजा रहा हूँ...`,{toast:{type:"success",message:`Playing: ${m[1].trim()} 🎵`}}) },
+  { re: /^(.+?)\s+(?:bajao|bajao na|bajao bhai|play karo|play karo na|chalao|chala do)$/i, handle: (m) => {
+    const q = m[1].trim();
+    // skip if it's obviously not music (short single word that could be command)
+    if (q.split(" ").length < 2) return { parsed: null, reply: "", isLLM: true };
+    return cmd("web","youtube_play",{query:q},`🎵 YouTube पर "${q}" बजा रहा हूँ...`,{toast:{type:"success",message:`Playing: ${q} 🎵`}});
+  }},
   { re: /(?:weather|mausam)\s*(?:of|in|ka)?\s*(.+)?/i, handle: (m) => cmd("weather","get",{location:m[1]?.trim()||"Delhi"},`🌤️ Weather: ${m[1]?.trim()||"Delhi"}…`) },
   
   // ══════ SOCIAL & COMMUNICATION ══════

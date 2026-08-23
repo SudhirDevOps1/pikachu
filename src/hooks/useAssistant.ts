@@ -137,8 +137,11 @@ export function useAssistant() {
 
     if (isAgentMode && result.parsed) {
       // In Agent Mode, pass web searches, research, complex file creation to autonomous Agent Loop
-      const isSimpleHardware = ["volume", "screen", "system"].includes(result.parsed.category) && !text.toLowerCase().includes("summary") && !text.toLowerCase().includes("research");
-      if (!isSimpleHardware) {
+      // BUT: always allow direct hardware + direct media/app/web commands to pass through
+      const ALWAYS_ALLOW = ["volume", "screen", "system", "apps", "app", "media", "web", "weather", "reminders", "reminder", "keyboard", "window"];
+      const isAllowed = ALWAYS_ALLOW.includes(result.parsed.category);
+      const isResearch = text.toLowerCase().includes("summary") || text.toLowerCase().includes("research");
+      if (!isAllowed || isResearch) {
         result = { parsed: null, reply: "", isLLM: true };
       }
     }
@@ -416,10 +419,19 @@ export function useAssistant() {
       if (msg.status === "error") {
         store.getState().addToast({ type: "error", message: msg.message });
       } else if (msg.message) {
-        streamText(msg.message, "pika");
+        // Deduplicate: check if the last spoken text was the same or very similar within 4 seconds
+        const now = Date.now();
+        const lastSpoken = lastSpokenRef.current;
+        const msgShort = msg.message.slice(0, 40);
+        const isSame = lastSpoken.text.includes(msgShort) || msg.message.includes(lastSpoken.text.slice(0, 40));
+        const isRecent = now - lastSpoken.time < 4000;
+        if (!(isSame && isRecent)) {
+          streamText(msg.message, "pika");
+          triggerTTS(msg.message);
+        }
       }
     }
-  }, [store, processInput]);
+  }, [store, processInput, streamText, triggerTTS]);
 
   const connect = useCallback(() => {
     const url = store.getState().settings.bridgeUrl;
