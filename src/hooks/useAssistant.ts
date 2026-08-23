@@ -69,27 +69,31 @@ export function useAssistant() {
   }, [store]);
 
   const triggerTTS = useCallback(
-    (text: string) => {
+    (text: string, _msgId?: string) => {
       const clean = text.trim();
       if (!clean) return;
       const now = Date.now();
-      // Prevent repeating utterance within 6 seconds
-      if (
-        (lastSpokenRef.current.text === clean ||
-          (clean.length > 20 && lastSpokenRef.current.text.startsWith(clean.slice(0, 30)))) &&
-        now - lastSpokenRef.current.time < 6000
-      ) {
+      // Robust dedup: block identical text OR same 40-char prefix within 6s
+      // This catches rapid double-invoke (StrictMode, duplicate llm_stream done, double click)
+      const prev = lastSpokenRef.current.text;
+      const isSame = prev === clean;
+      const isPrefixDup =
+        clean.length > 20 &&
+        prev.length > 20 &&
+        (prev.startsWith(clean.slice(0, 40)) || clean.startsWith(prev.slice(0, 40)));
+      if ((isSame || isPrefixDup) && now - lastSpokenRef.current.time < 6000) {
+        console.log("[TTS] dedup blocked duplicate:", clean.slice(0, 50));
         return;
       }
       lastSpokenRef.current = { text: clean, time: now };
 
-      // Stop previous audio playback & browser speech synthesis immediately
+      // Stop previous audio playback & browser speech synthesis immediately — atomic
       if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
+        try { currentAudioRef.current.pause(); } catch {}
         currentAudioRef.current = null;
       }
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
+        try { window.speechSynthesis.cancel(); } catch {}
       }
 
       const ttsEngine = store.getState().settings.ttsEngine || "edge";
@@ -143,7 +147,7 @@ export function useAssistant() {
       }
 
       const now = Date.now();
-      if (lastInputRef.current.text === cleanText && now - lastInputRef.current.time < 500) {
+      if (lastInputRef.current.text === cleanText && now - lastInputRef.current.time < 1200) {
         console.log("Skipping duplicate rapid input:", cleanText);
         return;
       }
@@ -399,6 +403,11 @@ export function useAssistant() {
     } else if (msg.type === "llm_stream") {
       const curId = msg.id;
       if (!curId) return;
+      // Dedup: if same llm_stream id already marked spoken, ignore duplicate done (prevents double TTS from provider fallback retry)
+      if (msg.done && spokenMessageIds.current.has(curId)) {
+        console.log("[TTS] llm_stream dedup: already spoken id", curId);
+        return;
+      }
       if (!store.getState().messages.find((m) => m.id === curId)) {
         store.getState().addMessage({ id: curId, role: "assistant", content: "", provider: msg.provider, isStreaming: true });
         store.getState().setAiThinking(false);
@@ -416,8 +425,16 @@ export function useAssistant() {
         }
         store.getState().finalizeMessage(curId);
         store.getState().setAiThinking(false);
+        // Mark as spoken BEFORE trigger to block racing duplicates
+        spokenMessageIds.current.add(curId);
+        // Prevent unbounded growth — keep last 50 ids
+        if (spokenMessageIds.current.size > 50) {
+          const first = spokenMessageIds.current.values().next().value;
+          if (first) spokenMessageIds.current.delete(first);
+        }
         const msgObj = store.getState().messages.find((m) => m.id === curId);
-        const fullText = (msgObj?.content || "") + (msg.chunk || "");
+        // FIX: content already includes chunk after append, don't add chunk again (was causing duplicated tail)
+        const fullText = msgObj?.content || "";
         if (fullText.trim()) {
           // Clean markdown, limit to first 300 chars so TTS doesn't read entire long response
           const cleanText = fullText
@@ -426,7 +443,7 @@ export function useAssistant() {
             .replace(/\n+/g, " ")
             .trim()
             .slice(0, 300);
-          if (cleanText) triggerTTS(cleanText);
+          if (cleanText) triggerTTS(cleanText, curId);
         }
         streamId.current = null;
       } else {
@@ -463,6 +480,11 @@ export function useAssistant() {
   }, [store, processInput, streamText]);
 
   const connect = useCallback(() => {
+    // Guard: don't create duplicate socket if already connecting/connected
+    if (ws.current && (ws.current.readyState === WebSocket.CONNECTING || ws.current.readyState === WebSocket.OPEN)) {
+      console.log("[WS] already connected/connecting, skip duplicate connect");
+      return;
+    }
     const url = store.getState().settings.bridgeUrl;
     store.getState().setConnection("connecting");
     try {
