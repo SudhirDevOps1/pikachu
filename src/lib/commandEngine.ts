@@ -134,9 +134,10 @@ const RULES: Rule[] = [
     if (!q || q === "karo" || q === "kar") return { parsed: null, reply: "", isLLM: true };
     return cmd("web","search",{query:q},`🔍 Searching: ${q}`,{toast:{type:"info",message:`Searching ${q}`}});
   }},
+  { re: /(?:youtube|yutub)\s*(?:par|mein|me|pr)?\s*(.+?)\s*(?:song|gaana|video)?\s*(?:bajao|play karo|play|chalao|shuru karo)/i, handle: (m) => cmd("web","youtube_play",{query:m[1].trim()},`🎵 YouTube पर ${m[1].trim()} चला रहा हूँ...`,{toast:{type:"success",message:`Playing ${m[1].trim()} 🎵`}}) },
+  { re: /(.+?)\s*(?:song|gaana|video)?\s*(?:bajao|play karo|play|chalao)\s*(?:youtube|yutub)\s*(?:mein|par|me|pr)/i, handle: (m) => cmd("web","youtube_play",{query:m[1].trim()},`🎵 YouTube पर ${m[1].trim()} चला रहा हूँ...`,{toast:{type:"success",message:`Playing ${m[1].trim()} 🎵`}}) },
+  { re: /(?:play|bajao|chalao)\s*(.+?)\s*(?:song|gaana|video)?\s*(?:on|in|par|mein)?\s*(?:youtube|yutub)/i, handle: (m) => cmd("web","youtube_play",{query:m[1].trim()},`🎵 YouTube पर ${m[1].trim()} चला रहा हूँ...`,{toast:{type:"success",message:`Playing ${m[1].trim()} 🎵`}}) },
   { re: /(?:youtube|yutub)\s*(?:search|par)?\s+(.+)/i, handle: (m) => cmd("web","youtube_search",{query:m[1].trim()},`▶️ YouTube: ${m[1].trim()}`) },
-  { re: /(.+?)\s*(?:song|gaana|video)?\s*(?:bajao|play karo|play|chalao)\s*(?:youtube|yutub)\s*(?:mein|par|me|pr)/i, handle: (m) => cmd("web","youtube_search",{query:m[1].trim()},`▶️ YouTube: ${m[1].trim()}`) },
-  { re: /(?:play|bajao|chalao)\s*(.+?)\s*(?:on|in|par|mein)?\s*(?:youtube|yutub)/i, handle: (m) => cmd("web","youtube_search",{query:m[1].trim()},`▶️ YouTube: ${m[1].trim()}`) },
   { re: /(?:weather|mausam)\s*(?:of|in|ka)?\s*(.+)?/i, handle: (m) => cmd("weather","get",{location:m[1]?.trim()||"Delhi"},`🌤️ Weather: ${m[1]?.trim()||"Delhi"}…`) },
   
   // ══════ SOCIAL & COMMUNICATION ══════

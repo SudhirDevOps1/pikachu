@@ -957,11 +957,29 @@ def cmd_web(action, params):
             name = str(params.get("name", "")).lower()
             url = URL_MAP.get(name, name if name.startswith("http") else f"https://{name}")
             webbrowser.open(url)
-            return ok(f"{name} खोल रहा हूँ।")
+            return ok(f"{name} खोल रहा हूँ। 🌐")
         if action == "search":
             q = params.get("query", "")
             webbrowser.open(f"https://www.google.com/search?q={urllib.parse.quote(q)}")
-            return ok(f'"{q}" सर्च कर रहा हूँ।')
+            return ok(f'"{q}" सर्च कर रहा हूँ। 🔍')
+        if action in ("youtube_search", "youtube_play", "play_song"):
+            q = params.get("query", "")
+            # Direct Video Auto-Play: Extract first video ID from YouTube HTML
+            play_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"
+            try:
+                search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"
+                req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    html = response.read().decode("utf-8")
+                    video_ids = re.findall(r"\"videoId\":\"([a-zA-Z0-9_-]{11})\"", html)
+                    if video_ids:
+                        first_vid = video_ids[0]
+                        play_url = f"https://www.youtube.com/watch?v={first_vid}"
+            except Exception as ex:
+                logger.warning(f"Direct youtube video fetch fallback to search page: {ex}")
+                
+            webbrowser.open(play_url)
+            return ok(f'YouTube पर "{q}" प्ले कर दिया! 🎵▶️', {"url": play_url, "query": q})
         return err(f"अज्ञात web action: {action}")
     except Exception as e:
         return err(str(e))
