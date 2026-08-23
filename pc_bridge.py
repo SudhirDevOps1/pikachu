@@ -298,6 +298,8 @@ APP_MAP = {
     "paint": "mspaint", "task manager": "taskmgr", "control panel": "control",
     "settings": "ms-settings:", "camera": "microsoft.windows.camera:",
     "snipping tool": "SnippingTool",
+    "omniroute": "http://127.0.0.1:20128", "omnoirout": "http://127.0.0.1:20128", "omni route": "http://127.0.0.1:20128",
+    "ollama": "http://127.0.0.1:11434", "lm studio": "http://127.0.0.1:1234",
 }
 
 URL_MAP = {
@@ -312,6 +314,8 @@ URL_MAP = {
     "amazon": "https://amazon.in", "flipkart": "https://flipkart.com",
     "netflix": "https://netflix.com", "hotstar": "https://hotstar.com",
     "chatgpt": "https://chat.openai.com", "claude": "https://claude.ai",
+    "omniroute": "http://127.0.0.1:20128", "omnoirout": "http://127.0.0.1:20128", "omni route": "http://127.0.0.1:20128",
+    "ollama": "http://127.0.0.1:11434", "lm studio": "http://127.0.0.1:1234",
 }
 
 

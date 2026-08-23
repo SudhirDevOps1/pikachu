@@ -106,6 +106,7 @@ const RULES: Rule[] = [
   { re: /(?:mere|mera|pc|computer)\s*(?:mein|me|pe)?\s*(?:kaun\s*kaun\s*se\s*apps?|installed\s*apps?|software|apps?\s*list|konsi\s*app|kya\s*kya\s*install\s*hai)/i, handle: () => cmd("apps","list",{},"📦 Scanning installed apps…",{toast:{type:"info",message:"Scanning apps…"}}) },
   { re: /^(?:apps?\s*list|installed\s*apps?|list\s*apps?|software\s*list|show\s*installed\s*apps)$/i, handle: () => cmd("apps","list",{},"📦 Scanning installed apps…",{toast:{type:"info",message:"Scanning apps…"}}) },
   { re: /(?:close|band karo|quit|exit)\s+(.+)/i, handle: (m) => cmd("apps","close",{name:m[1].trim()},`❌ Closed ${m[1].trim()}`,{toast:{type:"success",message:`Closed`}}) },
+  { re: /(?:open|kholo|launch|start|chalaao|chalao)\s+(?:omniroute|omnoirout|omni\s*route)/i, handle: () => cmd("apps","open",{name:"omniroute"},"🌐 Opening OmniRoute",{openUrl:"http://127.0.0.1:20128",toast:{type:"success",message:"Opening OmniRoute 🌐"}}) },
   { re: /(?:open|kholo|launch|start|chalaao)\s+(.+)/i, handle: (m) => {
       const t=m[1].trim().toLowerCase();
       const s=WEBSITE_LIST.find((w)=>w.name.toLowerCase().includes(t)||t.includes(w.name.toLowerCase().split(" ")[0]));

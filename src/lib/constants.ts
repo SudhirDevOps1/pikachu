@@ -42,6 +42,9 @@ export const WEBSITE_LIST: { name: string; url: string; icon: string }[] = [
   { name: "Flipkart", url: "https://flipkart.com", icon: "🛍️" },
   { name: "Netflix", url: "https://netflix.com", icon: "🍿" },
   { name: "Hotstar", url: "https://hotstar.com", icon: "⭐" },
+  { name: "OmniRoute", url: "http://127.0.0.1:20128", icon: "🌐" },
+  { name: "Ollama", url: "http://127.0.0.1:11434", icon: "🦙" },
+  { name: "LM Studio", url: "http://127.0.0.1:1234", icon: "🤖" },
 ];
 
 export interface Provider {
