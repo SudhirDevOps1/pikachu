@@ -97,14 +97,32 @@ export function useWeather() {
         return;
       } catch { /* ignore */ }
     }
-    if (navigator.geolocation) {
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions
+        .query({ name: "geolocation" as PermissionName })
+        .then((res) => {
+          if (res.state === "denied") {
+            useFallback();
+          } else if (res.state === "granted" || res.state === "prompt") {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                coords.current = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+                load(pos.coords.latitude, pos.coords.longitude);
+              },
+              () => useFallback(),
+              { timeout: 4000 }
+            );
+          }
+        })
+        .catch(() => useFallback());
+    } else if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           coords.current = { lat: pos.coords.latitude, lon: pos.coords.longitude };
           load(pos.coords.latitude, pos.coords.longitude);
         },
         () => useFallback(),
-        { timeout: 6000 }
+        { timeout: 4000 }
       );
     } else {
       useFallback();

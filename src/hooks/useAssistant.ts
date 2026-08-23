@@ -312,7 +312,7 @@ export function useAssistant() {
           // Backend sent base64 audio (Edge TTS mp3 / pyttsx3 wav) — play it
           try {
             const d = msg.data as { audio: string; format: string };
-            const mime = d.format === "wav" ? "audio/wav" : "audio/mpeg";
+            const mime = (d.format && d.format.includes("wav")) ? "audio/wav" : "audio/mpeg";
             const audio = new Audio(`data:${mime};base64,${d.audio}`);
             store.getState().setSpeaking(true);
             audio.onended = () => store.getState().setSpeaking(false);
@@ -441,9 +441,11 @@ export function useAssistant() {
     }
   }, []);
 
-  const sendRaw = useCallback((msg: WSMessage | ArrayBuffer) => {
+  const sendRaw = useCallback((msg: any) => {
     if (store.getState().isConnected && ws.current?.readyState === WebSocket.OPEN) {
-      if (msg instanceof ArrayBuffer) {
+      if (msg instanceof ArrayBuffer || msg instanceof Uint8Array) {
+        ws.current.send(msg);
+      } else if (typeof msg === "string") {
         ws.current.send(msg);
       } else {
         ws.current.send(JSON.stringify(msg));

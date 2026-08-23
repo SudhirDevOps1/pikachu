@@ -1474,60 +1474,70 @@ def _test_provider_http(provider: str, base_url: str = "", api_key: str = "", mo
     if single_key:
         headers["Authorization"] = f"Bearer {single_key}"
         
-    target_url = models_url
-    if not target_url:
-        if base_url:
-            clean_base = base_url.strip().rstrip("/")
-            clean_base = re.sub(r"/chat/completions/?$", "", clean_base).rstrip("/")
-            target_url = f"{clean_base}/models" if clean_base.endswith("/v1") else f"{clean_base}/v1/models"
-        elif provider == "omniroute":
-            target_url = "http://localhost:20128/v1/models"
-        elif provider in LLM_PROVIDERS:
-            def_url = LLM_PROVIDERS[provider][0]
-            clean_base = def_url.replace("/chat/completions", "")
-            target_url = f"{clean_base}/models"
+    candidate_urls = []
+    if models_url:
+        candidate_urls.append(models_url)
+    if base_url:
+        clean_base = base_url.strip().rstrip("/")
+        clean_base = re.sub(r"/chat/completions/?$", "", clean_base).rstrip("/")
+        candidate_urls.extend([
+            f"{clean_base}/models" if clean_base.endswith("/v1") else f"{clean_base}/v1/models",
+            f"{clean_base}/models",
+            f"{clean_base}/api/v1/models"
+        ])
     
-    if not target_url:
+    if provider == "omniroute" or "omniroute" in provider.lower():
+        candidate_urls.extend([
+            "http://127.0.0.1:20128/v1/models",
+            "http://localhost:20128/v1/models",
+            "http://127.0.0.1:20128/models",
+            "http://localhost:20128/models",
+            "http://127.0.0.1:8000/v1/models",
+            "http://localhost:8000/v1/models"
+        ])
+    elif provider in LLM_PROVIDERS:
+        def_url = LLM_PROVIDERS[provider][0]
+        clean_base = def_url.replace("/chat/completions", "")
+        candidate_urls.append(f"{clean_base}/models")
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_urls = [u for u in candidate_urls if u and not (u in seen or seen.add(u))]
+    
+    if not unique_urls:
         return {"status": "error", "error": "No endpoint URL configured"}
         
-    try:
-        r = requests.get(target_url, headers=headers, timeout=8)
-        lat = round((time.perf_counter() - start_t) * 1000)
-        if r.status_code == 200:
-            data = r.json()
-            models_list = []
-            if isinstance(data, list):
-                models_list = [m.get("id") or m.get("name") for m in data if isinstance(m, dict)]
-            elif isinstance(data, dict):
-                arr = data.get("data") or data.get("models") or []
-                if isinstance(arr, list):
-                    models_list = [m.get("id") or m.get("name") or (m if isinstance(m, str) else "") for m in arr]
-            
-            clean_models = sorted(list({m.replace("models/", "").strip() for m in models_list if m and isinstance(m, str)}))
-            return {
-                "status": "ok",
-                "latencyMs": lat,
-                "models": clean_models if clean_models else None,
-                "checkedAt": datetime.now(timezone.utc).isoformat()
-            }
-        elif r.status_code == 401:
-            return {"status": "error", "latencyMs": lat, "error": "Invalid API Key (401 Unauthorized)"}
-        else:
-            return {"status": "error", "latencyMs": lat, "error": f"HTTP {r.status_code}"}
-    except Exception as ex:
-        if provider == "omniroute" and "20128" in target_url:
-            try:
-                r2 = requests.get("http://localhost:8000/v1/models", headers=headers, timeout=5)
-                lat2 = round((time.perf_counter() - start_t) * 1000)
-                if r2.status_code == 200:
-                    data = r2.json()
+    last_err = None
+    for target_url in unique_urls:
+        try:
+            r = requests.get(target_url, headers=headers, timeout=6)
+            lat = round((time.perf_counter() - start_t) * 1000)
+            if r.status_code == 200:
+                data = r.json()
+                models_list = []
+                if isinstance(data, list):
+                    models_list = [m.get("id") or m.get("name") for m in data if isinstance(m, dict)]
+                elif isinstance(data, dict):
                     arr = data.get("data") or data.get("models") or []
-                    clean_models = sorted(list({(m.get("id") or m.get("name") or "").strip() for m in arr if isinstance(m, dict)}))
-                    return {"status": "ok", "latencyMs": lat2, "models": clean_models, "checkedAt": datetime.now(timezone.utc).isoformat()}
-            except Exception:
-                pass
-        lat = round((time.perf_counter() - start_t) * 1000)
-        return {"status": "error", "latencyMs": lat, "error": str(ex)}
+                    if isinstance(arr, list):
+                        models_list = [m.get("id") or m.get("name") or (m if isinstance(m, str) else "") for m in arr]
+                
+                clean_models = sorted(list({m.replace("models/", "").strip() for m in models_list if m and isinstance(m, str)}))
+                return {
+                    "status": "ok",
+                    "latencyMs": lat,
+                    "models": clean_models if clean_models else None,
+                    "checkedAt": datetime.now(timezone.utc).isoformat()
+                }
+            elif r.status_code == 401:
+                last_err = "Invalid API Key (401 Unauthorized)"
+            else:
+                last_err = f"HTTP {r.status_code}"
+        except Exception as ex:
+            last_err = str(ex)
+            
+    lat = round((time.perf_counter() - start_t) * 1000)
+    return {"status": "error", "latencyMs": lat, "error": last_err or "Connection failed"}
 SYSTEM_PROMPT = (
     "You are Pika (पिका), a smart, witty and friendly personal AI assistant running directly on the user's Windows PC. "
     "LANGUAGE: Speak in natural Hinglish (Hindi + English mix) by default — use Devanagari for Hindi words. "
@@ -1567,12 +1577,11 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
         
         mem_text = ""
         try:
-            if DATA_FILE.exists():
-                saved_data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-                vault = saved_data.get("memoryVault", [])
-                if vault:
-                    facts = [f"- {v['fact']}" for v in vault[-10:]]
-                    mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
+            saved_data = load_vault_data() or {}
+            vault = saved_data.get("memoryVault", [])
+            if vault:
+                facts = [f"- {v['fact']}" for v in vault[-10:]]
+                mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
         except Exception:
             pass
             
@@ -1660,12 +1669,11 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
             
         mem_text = ""
         try:
-            if DATA_FILE.exists():
-                saved_data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-                vault = saved_data.get("memoryVault", [])
-                if vault:
-                    facts = [f"- {v['fact']}" for v in vault[-10:]]
-                    mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
+            saved_data = load_vault_data() or {}
+            vault = saved_data.get("memoryVault", [])
+            if vault:
+                facts = [f"- {v['fact']}" for v in vault[-10:]]
+                mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
         except Exception:
             pass
             
@@ -1816,7 +1824,7 @@ async def handle_query(ws, msg):
     params = msg.get("params") or {}
     text = params.get("text", "")
     conv_id = msg.get("id")
-    provider_name = params.get("provider", "groq")
+    provider_name = params.get("provider", "")
     api_key_from_ui = params.get("api_key", "")
     keys_map = params.get("api_keys") or {}
     if api_key_from_ui:
@@ -1860,8 +1868,24 @@ async def handle_agent_action(ws, msg):
     text = params.get("text", "")
     conv_id = msg.get("id")
 
-    provider_name = params.get("provider", "groq")
+    provider_name = params.get("provider", "")
     api_key_from_ui = params.get("api_key", "")
+    
+    provider_info = LLM_PROVIDERS.get(provider_name, ("", "", ""))
+    url, default_model, env_var = provider_info[0], provider_info[1], provider_info[2]
+    
+    custom_providers = params.get("custom_providers") or []
+    for cp in custom_providers:
+        if cp.get("id") == provider_name or cp.get("name") == provider_name:
+            url = cp.get("baseUrl", url)
+            default_model = cp.get("model", default_model)
+            if not api_key_from_ui:
+                api_key_from_ui = cp.get("apiKey", "")
+            break
+
+    model = (params.get("provider_models") or {}).get(provider_name, default_model)
+    raw_keys = api_key_from_ui or os.getenv(env_var, "") or ""
+    api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
     if not api_keys:
         api_keys = ["no-key"]
     

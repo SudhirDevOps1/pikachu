@@ -17,11 +17,14 @@ export function TopBar() {
   const updateSettings = useStore((s) => s.updateSettings);
   const setUiMode = useStore((s) => s.setUiMode);
 
-  const sttEngine = useStore((s) => s.activeSttEngine);
-  const ttsEngine = useStore((s) => s.activeTtsEngine);
-  const llmEngine = useStore((s) => s.activeLlmEngine);
+  const stt = useStore((s) => s.settings.sttEngine) || "webspeech";
+  const tts = useStore((s) => s.settings.ttsEngine) || "edge";
+  const llm = useStore((s) => s.settings.aiProvider) || "groq";
 
+  const sttDisplay = stt === "webspeech" ? "WebSpeech" : stt === "vosk" ? "Vosk Live" : "Whisper";
+  const ttsDisplay = tts === "edge" ? "Edge-TTS" : tts === "piper" ? "Piper Offline" : tts === "webspeech" ? "WebSpeech" : "Mute";
   const providerInfo = PROVIDERS.find((p) => p.id === provider);
+  const llmDisplay = providerInfo?.name ?? llm.toUpperCase();
 
   let label = connectionStatus === "connecting" ? "CONNECTING" : "IDLE";
   let dot = "#22c55e";
@@ -51,9 +54,9 @@ export function TopBar() {
         </div>
 
         <div className="glass-card hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-[10px] uppercase tracking-wider sm:flex text-white/50">
-          <span className="font-medium text-white/70">STT:</span> {sttEngine} <span className="mx-1 opacity-20">|</span>
-          <span className="font-medium text-white/70">TTS:</span> {ttsEngine} <span className="mx-1 opacity-20">|</span>
-          <span className="font-medium text-white/70">LLM:</span> {llmEngine}
+          <span className="font-medium text-white/70">STT:</span> <span className="text-cyan-400 font-semibold">{sttDisplay}</span> <span className="mx-1 opacity-20">|</span>
+          <span className="font-medium text-white/70">TTS:</span> <span className="text-purple-400 font-semibold">{ttsDisplay}</span> <span className="mx-1 opacity-20">|</span>
+          <span className="font-medium text-white/70">LLM:</span> <span className="text-emerald-400 font-semibold">{llmDisplay}</span>
         </div>
 
         <div className="glass-card flex items-center gap-1 rounded-full px-2.5 py-1.5 text-xs text-white/50 md:hidden">

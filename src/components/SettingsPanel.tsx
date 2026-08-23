@@ -47,6 +47,16 @@ export function SettingsPanel() {
   const runTest = async (provider: string) => {
     setTesting((t) => ({ ...t, [provider]: true }));
     sounds.click();
+    
+    sendRaw({
+      type: "test_provider_backend",
+      params: {
+        provider,
+        apiKey: settings.apiKeys[provider] || "",
+      },
+      id: crypto.randomUUID(),
+    } as any);
+
     await testProvider(provider);
     setTesting((t) => ({ ...t, [provider]: false }));
   };
