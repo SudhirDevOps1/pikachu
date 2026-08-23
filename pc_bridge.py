@@ -1152,10 +1152,29 @@ async def handle_query(ws, msg):
     provider_name = params.get("provider", "groq")
     api_key_from_ui = params.get("api_key", "")
     keys_map = {provider_name: api_key_from_ui} if api_key_from_ui else {}
+    
+    prompt_tokens = max(1, len(text) // 4 + 40)
+    completion_tokens = 0
+    
     async for chunk, provider, done in llm_stream(text, keys_map=keys_map):
-        await ws.send(json.dumps({"type": "llm_stream", "chunk": chunk, "provider": provider,
-                                  "id": conv_id, "done": done,
-                                  "timestamp": datetime.now(timezone.utc).isoformat()}))
+        if chunk:
+            completion_tokens += max(1, len(chunk) // 4)
+        usage_payload = None
+        if done:
+            usage_payload = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": max(1, completion_tokens),
+                "total_tokens": prompt_tokens + max(1, completion_tokens)
+            }
+        await ws.send(json.dumps({
+            "type": "llm_stream", 
+            "chunk": chunk, 
+            "provider": provider,
+            "id": conv_id, 
+            "done": done,
+            "usage": usage_payload,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }))
         if done:
             break
 
@@ -1264,13 +1283,21 @@ async def handle_agent_action(ws, msg):
                     }))
 
             history_list = params.get("history", [])
-            resp_text = await agent.run(text, conversation=history_list, on_tool_event=_on_tool_event)
+            prompt_tokens = max(1, len(text) // 4 + len(sys_prompt) // 4)
+            completion_tokens = max(1, len(resp_text) // 4)
+            total_tokens = prompt_tokens + completion_tokens
+
             await ws.send(json.dumps({
                 "type": "llm_stream", 
                 "chunk": resp_text, 
                 "provider": provider_name,
                 "id": conv_id, 
                 "done": True,
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens
+                },
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }))
             return
