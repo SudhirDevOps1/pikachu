@@ -38,8 +38,14 @@ export function TranscriptPanel() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, isAiThinking]);
 
-  const mood: PikaMood = isListening ? "listening" : isSpeaking ? "speaking" : isAiThinking ? "thinking" : "neutral";
-  const moodLabel = { listening: "LISTENING", speaking: "SPEAKING", thinking: "THINKING", neutral: "NEUTRAL" }[mood];
+  const mood: PikaMood = isListening ? "listening" : isSpeaking ? "speaking" : isAiThinking ? "thinking" : "happy";
+  const moodLabel = {
+    listening: "🎙️ LISTENING",
+    speaking: "🔊 SPEAKING",
+    thinking: "⚡ THINKING...",
+    happy: "✨ READY",
+    neutral: "✨ READY",
+  }[mood];
 
   const send = () => {
     if (!input.trim()) return;

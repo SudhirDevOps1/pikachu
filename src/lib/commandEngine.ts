@@ -179,20 +179,21 @@ const RULES: Rule[] = [
 
   // ══════ AI PROVIDER ══════
   { re: /(?:switch|badlo|use)\s*(?:to)?\s*(groq|gemini|mistral|cerebras|openrouter|zai|deepseek)/i, handle: (m) => cmd("config","switch_provider",{provider:m[1].toLowerCase()},`🔄 Provider: ${m[1]}`,{toast:{type:"success",message:`Provider: ${m[1]}`}}) },
-  // ══════ EXTRA HINGLISH NATURAL PATTERNS ══════
-  { re: /(?:meri|mera)\s*(?:battery|bateri)\s*(?:kitni|check|dikhao)?/i, handle: () => cmd("info","battery",{},"🔋 Battery check kar raha hoon...") },
-  { re: /(?:awaz|awaaz)\s*(?:band|off)\s*(?:karo|kar)?/i, handle: () => cmd("volume","mute",{},"🔇 Awaaz mute kar di!",{toast:{type:"success",message:"Mute ✓"}}) },
-  { re: /(?:awaz|awaaz)\s*(?:zyada|tez|badhao|badha do)/i, handle: () => cmd("volume","up",{amount:10},"🔊 Awaaz badhi!",{toast:{type:"success",message:"Volume ↑"}}) },
-  { re: /(?:awaz|awaaz)\s*(?:kam|choti|ghatao|ghata do)/i, handle: () => cmd("volume","down",{amount:10},"🔉 Awaaz kam!",{toast:{type:"success",message:"Volume ↓"}}) },
-  { re: /(?:abhi|aaj)\s*(?:time|samay)\s*(?:kya|batao)?/i, handle: () => { const t=new Date().toLocaleTimeString("hi-IN"); return cmd("info","time",{},`⏰ अभी ${t} बज रहे हैं`); } },
-  { re: /(?:aaj)\s*(?:date|taarikh)\s*(?:kya|batao)?/i, handle: () => { const d=new Date().toLocaleDateString("hi-IN",{weekday:"long",day:"numeric",month:"long"}); return cmd("info","date",{},`📅 आज ${d} है`); } },
-  { re: /(?:screen\s*lock|lock\s*screen|screen\s*band)\s*(?:karo|kar)?/i, handle: () => cmd("system","lock",{},"🔒 Screen lock kar di!",{toast:{type:"success",message:"Locked ✓"}}) },
-  { re: /(?:computer|pc|laptop)\s*(?:band|off)\s*(?:karo|kar)?/i, handle: () => cmd("system","shutdown",{delay:30},"⚠️ PC band karne ka confirm karein") },
-  { re: /(?:screenshot|tasveer)\s*(?:lo|le|lelo|lijiye)?/i, handle: () => cmd("screen","screenshot",{},"📸 Screenshot le raha hoon!",{toast:{type:"success",message:"Saved ✓"}}) },
-  { re: /(?:kya|batao)\s*(?:chal raha|ho raha)\s*(?:hai|hain)/i, handle: () => cmd("info","full_report",{},"📊 System report...") },
-  { re: /(?:hey\s*pika|pika\s*sun|pika\s*suno|pika\s*help)/i, handle: () => ({ parsed: null, reply: "Haan bhai! 😊 Batao kya chahiye?", isLLM: false }) },
+  // ══════ OBSIDIAN VAULT COMMANDS ══════
+  { re: /(?:obsidian)\s*(?:me|mein)?\s*(?:daily note|aaj ka note|din ka note)\s*(?:banao|likho|kholo)?/i, handle: () => cmd("obsidian","daily_note",{},"📝 Obsidian में आज का डेली नोट बना रहा हूँ...",{toast:{type:"success",message:"Obsidian Daily Note 📝"}}) },
+  { re: /(?:obsidian)\s*(?:me|mein)?\s*(?:files|notes|list)\s*(?:dikhao|list karo|check karo)?/i, handle: () => cmd("obsidian","list_files",{},"📂 Obsidian की फाइलें ला रहा हूँ...") },
+  { re: /(?:obsidian)\s*(?:me|mein)?\s*(?:search|khojo|dhundo)\s+(.+)/i, handle: (m) => cmd("obsidian","search",{query:m[1].trim()},`🔍 Obsidian में सर्च कर रहा हूँ: ${m[1].trim()}`) },
+  { re: /(?:obsidian)\s*(?:me|mein)?\s*(?:read|padho|kholo)\s+(.+)/i, handle: (m) => cmd("obsidian","read_file",{path:m[1].trim()},`📖 Obsidian नोट पढ़ रहा हूँ: ${m[1].trim()}`) },
+  { re: /(?:obsidian)\s*(?:me|mein)?\s*(?:note|file)\s*(?:banao|likho)\s+([^\s]+)(?:\s+(?:content|mein|likho|with)\s+(.+))?/i, handle: (m) => cmd("obsidian","create_file",{path:m[1].endsWith(".md")?m[1]:`${m[1]}.md`,content:m[2]||`# ${m[1]}\n\nCreated by Pika AI.`},`📝 Obsidian में नोट बना रहा हूँ: ${m[1]}`,{toast:{type:"success",message:"Note Created 📝"}}) },
+
+  // ══════ ULTRA-FAST INSTANT CONVERSATION ══════
+  { re: /^(?:hii+|hey+|hello+|namaste|pranam|namaskar|salaam|yo)\b/i, handle: () => ({ parsed: null, reply: "नमस्ते! 😊 मैं पिका हूँ। बताओ आज क्या करना है?", isLLM: false }) },
+  { re: /^(?:kaise\s*ho|kaisa\s*hai|how\s*are\s*you|kya\s*haal\s*hai)\b/i, handle: () => ({ parsed: null, reply: "मैं बिल्कुल बढ़िया और तैयार हूँ! ⚡ बताओ क्या काम करना है?", isLLM: false }) },
+  { re: /^(?:thank\s*you|shukriya|dhanyawad|thanks|dhanyawaad)\b/i, handle: () => ({ parsed: null, reply: "अरे कोई बात नहीं दोस्त! 😊 कभी भी याद कर लेना।", isLLM: false }) },
+  { re: /^(?:bye|alvida|good\s*night|chalta\s*hoon)\b/i, handle: () => ({ parsed: null, reply: "बाय बाय! 👋 अपना ध्यान रखना, फिर मिलेंगे!", isLLM: false }) },
   { re: /(?:tera\s*naam|aap\s*ka\s*naam|tum\s*kaun)\s*(?:ho|hai)?/i, handle: () => ({ parsed: null, reply: "Main Pika hoon! ⚡ Tumhara personal AI assistant. Batao kya help chahiye?", isLLM: false }) },
   { re: /(?:kitna\s*baja|time\s*batao|samay\s*batao)/i, handle: () => { const t=new Date().toLocaleTimeString("hi-IN"); return { parsed: null, reply: `⏰ अभी ${t} बज रहे हैं`, isLLM: false }; } },
+  { re: /(?:hey\s*pika|pika\s*sun|pika\s*suno|pika\s*help)/i, handle: () => ({ parsed: null, reply: "Haan bhai! 😊 Batao kya chahiye?", isLLM: false }) },
 ];
 
 export function parseCommand(text: string): CommandResult {
