@@ -855,6 +855,7 @@ function SubAgentsSection() {
 function CustomProvidersSection() {
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
+  const apiHealthStore = useStore((s) => s.apiHealth);
   const { sendRaw } = useAssistantApi();
   const list = settings.customProviders;
 
@@ -879,8 +880,9 @@ function CustomProvidersSection() {
 
   const handleTest = async (c: (typeof list)[0]) => {
     setTestingMap((s) => ({ ...s, [c.id]: true }));
+    sounds.click();
     try {
-      // 1. First attempt backend proxy test via WebSocket for zero CORS
+      // 1. Send WebSocket backend proxy test (Zero-CORS, checks local port 20128 & fetches live models)
       sendRaw({
         type: "test_provider_backend",
         params: {
@@ -891,25 +893,21 @@ function CustomProvidersSection() {
         id: crypto.randomUUID(),
       } as any);
 
-      // 2. Also run browser client test
-      const res = await testCustomProvider(c.baseUrl, c.apiKey);
-      setHealthMap((s) => ({ ...s, [c.id]: res }));
-      if (res.status === "ok") {
-        sounds.success();
-        if (res.models && res.models.length > 0 && (!c.model || c.model === "model-name")) {
-          patch(c.id, { model: res.models[0] });
+      // 2. Client test for external HTTPS URLs
+      if (!c.baseUrl.includes("localhost") && !c.baseUrl.includes("127.0.0.1")) {
+        const res = await testCustomProvider(c.baseUrl, c.apiKey);
+        setHealthMap((s) => ({ ...s, [c.id]: res }));
+        if (res.status === "ok") {
+          sounds.success();
+          if (res.models && res.models.length > 0 && (!c.model || c.model === "model-name")) {
+            patch(c.id, { model: res.models[0] });
+          }
         }
-      } else {
-        sounds.error();
       }
-    } catch (e) {
-      setHealthMap((s) => ({
-        ...s,
-        [c.id]: { status: "error", error: e instanceof Error ? e.message : "Test failed" },
-      }));
-      sounds.error();
+    } catch {
+      // WebSocket backend will deliver the live models
     } finally {
-      setTestingMap((s) => ({ ...s, [c.id]: false }));
+      setTimeout(() => setTestingMap((s) => ({ ...s, [c.id]: false })), 800);
     }
   };
 
@@ -920,7 +918,7 @@ function CustomProvidersSection() {
       </p>
       <div className="space-y-3">
         {list.map((c) => {
-          const health = healthMap[c.id];
+          const health = apiHealthStore[c.name] || apiHealthStore[c.id] || healthMap[c.id];
           const isTesting = testingMap[c.id];
           const isActive = settings.aiProvider === c.id;
 
