@@ -1181,19 +1181,33 @@ async def handle_agent_action(ws, msg):
 
     # Obsidian Vault Detection & Integration
     obsidian_enabled = params.get("obsidianEnabled", True)
-    obsidian_url = params.get("obsidianUrl", "http://127.0.0.1:27123").rstrip("/")
-    obsidian_api_key = params.get("obsidianApiKey", "dbf82d623869be56014c25094c549529697c7040585fe45cdd8da40ee9349231")
+    obsidian_url = params.get("obsidianUrl", "") or os.getenv("OBSIDIAN_URL", "http://127.0.0.1:27123")
+    obsidian_api_key = params.get("obsidianApiKey", "") or os.getenv("OBSIDIAN_API_KEY", "")
     
-    obsidian_vault_path = "E:\\obsidian"
+    if not obsidian_api_key:
+        try:
+            if DATA_FILE.exists():
+                saved = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+                s = saved.get("settings", {})
+                obsidian_api_key = obsidian_api_key or s.get("obsidianApiKey", "")
+                obsidian_url = obsidian_url or s.get("obsidianUrl", "http://127.0.0.1:27123")
+        except Exception:
+            pass
+            
+    obsidian_url = obsidian_url.rstrip("/")
+    
+    obsidian_vault_path = ""
     try:
         obs_cfg = Path(os.environ.get("APPDATA", "")) / "obsidian" / "obsidian.json"
         if obs_cfg.exists():
             vdata = json.loads(obs_cfg.read_text(encoding="utf-8"))
             for v in vdata.get("vaults", {}).values():
                 if v.get("open") or not obsidian_vault_path:
-                    obsidian_vault_path = v.get("path", obsidian_vault_path)
+                    obsidian_vault_path = v.get("path", "")
     except Exception:
         pass
+    if not obsidian_vault_path or not Path(obsidian_vault_path).exists():
+        obsidian_vault_path = str(Path.home() / "Documents" / "Obsidian")
 
     sys_prompt = (
         "You are Pika, a fast, advanced local AI assistant on the user's Windows PC.\n"

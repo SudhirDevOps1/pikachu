@@ -565,7 +565,7 @@ function ObsidianSection() {
                     type={showKey ? "text" : "password"}
                     value={settings.obsidianApiKey || ""}
                     onChange={(e) => updateSettings({ obsidianApiKey: e.target.value })}
-                    placeholder="dbf82d623..."
+                    placeholder="Bearer token from Local REST API plugin..."
                     className="w-full rounded-lg bg-white/5 px-3 py-2 pr-9 font-mono text-sm text-white outline-none placeholder-white/25 focus:bg-white/10"
                   />
                   <button
