@@ -200,6 +200,14 @@ export function useAssistant() {
       return;
     }
 
+    // ── Quick replies (isLLM:false, parsed:null) — show immediately, no LLM call ──
+    // e.g. "kaise ho", "bye", "shukriya", "tera naam kya hai"
+    if (!result.isLLM && result.reply) {
+      streamText(result.reply, "pika");
+      triggerTTS(result.reply);
+      return;
+    }
+
     // No command matched → conversation → LLM
     store.getState().setAiThinking(true);
     const connected = store.getState().isConnected;
@@ -241,7 +249,7 @@ export function useAssistant() {
       store.getState().addToast({ type: "error", message: "ब्रिज कनेक्ट नहीं है (PC Bridge is off)!" });
       streamText("कृपया मुझे इंटरनेट और बैकएंड से जोड़ने के लिए PC Bridge चालू करें।", "pika");
     }
-  }, [store, streamText]);
+  }, [store, streamText, triggerTTS]);
 
   // Approve/reject confirmation
   const resolveConfirmation = useCallback((approve: boolean) => {
@@ -296,7 +304,9 @@ export function useAssistant() {
           store.getState().setSpeaking(true);
           break;
         case "tts_ended":
-          store.getState().setSpeaking(false);
+          // NOTE: Don't setSpeaking(false) here — backend sends this immediately after
+          // generating audio, but the browser hasn't finished PLAYING the audio yet.
+          // audio.onended in the tts_audio handler correctly sets speaking=false.
           break;
         case "reminder_triggered":
           sounds.notification();
