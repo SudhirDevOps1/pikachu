@@ -223,6 +223,7 @@ WAKE_WORDS = ["hey assistant", "hey pika", "पिका", "pika", "हे अ�
 VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip"
 VOSK_MODEL_DIR = Path(__file__).parent / "models" / "hi"
 DEFAULT_TTS_VOICE = "hi-IN-SwaraNeural"
+connected_clients: set = set()
 
 _vosk_model = None
 
