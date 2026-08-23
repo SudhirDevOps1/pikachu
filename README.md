@@ -2,16 +2,16 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-1.0.0-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
+[![Version](https://img.shields.io/badge/version-1.1.0-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3b82f6.svg?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B%20%7C%2020%2B%20%7C%2022%2B-22c55e.svg?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20%7C%20Linux%20%7C%20macOS-f59e0b.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
 
-**आपका व्यक्तिगत Jarvis-स्तरीय ऑटोनॉमस PC AI असिस्टेंट**  
-*A privacy-first, ultra-responsive Desktop AI Assistant with natural Hindi/English/Hinglish speech, full PC automation, Obsidian second brain integration, and multi-LLM rotation.*
+**आपका व्यक्तिगत Jarvis-स्तरीय ऑटोनॉमस PC AI असिस्टेंट (v1.1.0 Production Release)**  
+*A privacy-first, ultra-responsive Desktop AI Assistant with natural Hindi/English/Hinglish speech, multi-agent swarm builder, screen vision perception, token analytics, full PC automation, and Obsidian integration.*
 
-[🚀 Quick Start](#-1-click-quick-start) • [✨ Features](#-key-features) • [🧠 Architecture](#-architecture) • [🗣️ Voice Commands](#️-voice--chat-commands-cheatsheet) • [📓 Obsidian Setup](#-obsidian-second-brain-integration) • [⚠️ Limitations](#-limitations--best-practices)
+[🚀 Quick Start](#-1-click-quick-start) • [✨ Highlights](#-highlights) • [🤖 Sub-Agent Swarm](#-custom-sub-agent-swarm-manager) • [📊 Token Analytics](#-token-usage--analytics-dashboard) • [🏗️ Architecture](#-architecture) • [🗣️ Voice Commands](#️-voice--chat-commands-cheatsheet) • [📓 Obsidian Setup](#-obsidian-second-brain-integration)
 
 </div>
 
@@ -19,13 +19,18 @@
 
 ## 🌟 Highlights
 
-- 🗣️ **Natural Hindi, English & Hinglish Voice AI** — Speaks in crystal-clear **Microsoft Neural HD Voice (`hi-IN-SwaraNeural` / `en-US-JennyNeural`)** with real-time browser Web Speech STT and offline **Vosk** backup.
-- 🎭 **Dynamic Animated Avatar** — Facial expressions react live to speaking (lip-sync), listening (waveform aura rings), thinking (cyber holographic eyes), and idle states.
-- 🤖 **Autonomous Agent Mode (Powered by Agent-Mini)** — Give high-level goals (*"Desktop par ek folder banao aur research notes likho"*) and Pika safely executes multi-step terminal, shell, and file tools locally.
-- 📓 **Obsidian Second Brain Integration** — Real-time read/write, search, and daily note creation in your Obsidian Vault via Local REST API.
-- ⚡ **Multi-LLM Provider & Key Auto-Rotation** — Supports Mistral, Groq, Google Gemini, DeepSeek, Cerebras, OpenRouter, and Local Ollama with comma-separated multiple keys (`key1,key2,key3`) for zero quota limits.
-- 💻 **Complete PC Automation** — App launcher, volume/brightness control, process killer, system lock/sleep/shutdown, screenshot capture, live CPU/RAM/Battery HUD, and macro automation.
-- 📱 **Mobile & LAN Access** — Control your PC from your smartphone browser over your home Wi-Fi network.
+- 🗣️ **Natural Hindi, English & Hinglish Voice AI** — Speaks in crystal-clear **Microsoft Neural HD Voice (`hi-IN-SwaraNeural` / `en-US-JennyNeural`)** and **100% Offline Neural Piper TTS (`models/piper/hi.onnx`)** with anti-repeat deduplication and offline **Vosk STT** backup.
+- 🔌 **100% Air-Gapped Offline Mode** — Complete zero-internet autonomy using **Vosk (STT) + Ollama (LLM) + Piper TTS (Neural Voice)**.
+- 🔐 **Military-Grade Hardware Vault Encryption** — All API keys, settings, and memories in `pika_data.json` are automatically protected using **Windows Native DPAPI (User Master Key) + AES-256** against data theft.
+- 🌐 **OmniRoute & Custom OpenAI Provider Live Discovery** — Zero-CORS backend proxy to fetch live models from OmniRoute (`:20128`), LM Studio, vLLM, Ollama, Together, and any custom endpoint with interactive model selector and latency check.
+- 🤖 **Custom Sub-Agent Swarm Builder** — Create and configure your own specialized sub-agents with custom names, roles, system prompts, models, and interactive tool permissions (Web Search, File Creator, Vision, Obsidian, Terminal).
+- 📊 **Persistent Token Analytics & Cost Dashboard** — Real-time tracking of Prompt, Completion, and Total tokens with provider-wise visual progress bars and zero data loss (`pika_data.json` encrypted vault persistence).
+- 💬 **Interactive Chat Toolbar & Inline Prompt Editor** — One-click markdown copy, inline prompt editing with instant re-run, TTS voice replay, and retry actions on every message bubble.
+- 🔍 **Native Windows Installed Software Scanner & Fast App Launcher** — Scans registry (`HKLM`/`HKCU`), Desktop, and Start Menu shortcuts (`.lnk`) to instantly open and control real desktop apps (Brave, VS Code, Obsidian, 7-Zip, Chrome, etc.) with 10ms response time.
+- ☀️ **True Hardware Screen Brightness & Windows Power Controls** — Real hardware monitor brightness control (`screen_brightness_control`), Empty Recycle Bin, DNS Flush, Temp Clean, and Window Snap controls.
+- 👁️ **Multimodal Screen Perception + DuckDuckGo Research** — Analyzes active window errors/charts, runs live DuckDuckGo web research, and delivers AI-filtered step-by-step solutions in natural Hinglish.
+- 🧠 **Long-Term Memory Vault & Obsidian Second Brain** — Contextual memory that persists user preferences across sessions and syncs in real-time to your Obsidian Vault.
+- ⚡ **Multi-Key Auto-Rotation** — Comma-separated API keys (`key1,key2,key3`) for unlimited zero-quota failover.
 
 ---
 
@@ -178,15 +183,54 @@ To connect Pika to your Obsidian Vault:
 
 ---
 
-## 🔑 Multi-API Key Setup & Auto-Rotation
+## 🤖 Custom Sub-Agent Swarm Manager
 
-To prevent rate limits (`429 Too Many Requests`) and quota exhaustion:
-1. Open **Pika AI Settings → AI Providers**.
-2. In any provider's API key field, enter multiple keys separated by commas:
-   ```text
-   gsk_key1..., gsk_key2..., gsk_key3...
-   ```
-3. Pika automatically rotates through your keys if any key hits a quota or rate limit.
+Pika allows you to build an autonomous multi-agent swarm right from the UI:
+
+1. Open **Settings (⚙️) → Sub-Agent Team (सब-एजेंट टीम)**.
+2. Click **`+ नया एजेंट जोड़ें` (Add New Agent)**.
+3. Configure your specialized agent:
+   - **Name & Role:** e.g. `📊 Data Analyst`, `🛡️ Security Auditor`, `🌐 Deep Web Researcher`.
+   - **AI Provider & Model:** Assign any cloud model (Groq Llama 3.1 70B, Gemini 2.0 Flash, Mistral Large, Nvidia NIM) or offline Local Ollama.
+   - **Custom System Persona:** Provide specialized operational guidelines.
+   - **Interactive Tool Toggles:** Assign granular permissions for `DuckDuckGo Search`, `File Writer`, `Screen Vision`, `Obsidian Sync`, and `Terminal Automation`.
+4. Enable or disable sub-agents with a single toggle switch or delete them at will.
+
+---
+
+## 📊 Token Usage & Analytics Dashboard
+
+Track your LLM consumption with permanent, zero-data-loss telemetry:
+- 🔢 **Prompt Tokens:** Total prompt tokens submitted.
+- ✍️ **Completion Tokens:** Generated AI response tokens.
+- 🏆 **Total Tokens:** Cumulative total with cost-saving calculations.
+- 📈 **Provider Progress Bars:** Visual percentage breakdown for each connected provider.
+- 💾 **Permanent Disk Persistence:** All telemetry is mirrored between `localStorage` and `pika_data.json` so data survives system restarts.
+- 🔄 **One-Click Reset:** Reset your token usage counter anytime.
+
+---
+
+## 💬 Interactive Chat Toolbar & Inline Prompt Editor
+
+Every chat bubble in the UI includes an intuitive hover action bar:
+- 📋 **Copy to Clipboard:** 1-click Markdown copy for user prompts and assistant answers with visual feedback.
+- ✏️ **Inline Prompt Editor (User Prompts):** Click the pencil icon to modify past messages in-place with **"Save & Re-send (🚀)"** or **"Save Only"**.
+- 🔊 **TTS Voice Replay:** Click the speaker icon on any assistant response to hear it read aloud in natural Hindi/English neural voice.
+- 🔄 **One-Click Re-run:** Re-execute any past command instantly.
+
+---
+
+## 🔑 Multi-API Key Setup & Live Model Auto-Discovery
+
+### Live Model Discovery
+When you enter an API key for any of the 12 supported providers (Groq, Google AI Studio, Nvidia NIM, Together AI, Cerebras, Cohere, Mistral, Ollama Local, OpenRouter, DeepSeek, Z.ai, OmniRoute) and click **"Test"**, Pika automatically discovers and populates the dropdown with all currently active, live models available on that endpoint.
+
+### Zero-Quota Failover (Key Auto-Rotation)
+In any provider's API key field, enter multiple keys separated by commas:
+```text
+gsk_key1..., gsk_key2..., gsk_key3...
+```
+Pika automatically rotates to the next key if a rate limit (`429 Too Many Requests`) or quota limit is reached.
 
 Alternatively, configure your keys in a `.env` file (see [`.env.example`](.env.example)).
 
@@ -203,8 +247,9 @@ Alternatively, configure your keys in a `.env` file (see [`.env.example`](.env.e
 
 ## 🛡️ Privacy & Security
 
-- **100% Local Storage:** Settings, chat history, and API keys are stored locally on your PC in `pika_data.json` and `.env` (never uploaded to any third-party telemetry).
-- **Zero Cloud Tracking:** All OS automation and shell executions happen directly on your local machine.
+- **🔐 Windows DPAPI & AES-256 Vault Encryption:** All sensitive settings, custom provider endpoints, and API keys stored in `pika_data.json` are cryptographically encrypted using Windows Native DPAPI tied to your hardware TPM and Windows User Master Key. The file is unreadable in plaintext and cannot be decrypted on other computers.
+- **🔌 100% Air-Gapped Local Mode:** When using Vosk STT, Piper TTS, and Ollama local models, Pika runs entirely offline without sending a single byte outside your PC.
+- **Zero Cloud Tracking:** No analytics, telemetry, or external tracking servers. Everything stays strictly under your control.
 
 ---
 

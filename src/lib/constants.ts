@@ -53,13 +53,17 @@ export interface Provider {
 }
 
 export const PROVIDERS: Provider[] = [
-  { id: "groq", name: "Groq", model: "llama-3.3-70b-versatile", keyEnv: "GROQ_API_KEY", desc: "सबसे तेज़ · Fastest" },
-  { id: "gemini", name: "Gemini", model: "gemini-2.0-flash", keyEnv: "GEMINI_API_KEY", desc: "Google · Multimodal" },
-  { id: "mistral", name: "Mistral", model: "mistral-small-latest", keyEnv: "MISTRAL_API_KEY", desc: "1M tokens/day" },
-  { id: "cerebras", name: "Cerebras", model: "llama-3.3-70b", keyEnv: "CEREBRAS_API_KEY", desc: "Ultra-fast inference" },
-  { id: "openrouter", name: "OpenRouter", model: "llama-3.3-70b:free", keyEnv: "OPENROUTER_API_KEY", desc: "20+ free models" },
+  { id: "groq", name: "Groq", model: "llama-3.3-70b-versatile", keyEnv: "GROQ_API_KEY", desc: "सबसे तेज़ · Fastest (Llama 3.3, R1, Mixtral)" },
+  { id: "gemini", name: "Google AI Studio", model: "gemini-2.0-flash", keyEnv: "GEMINI_API_KEY", desc: "Gemini 2.0 Flash / Pro · Multimodal" },
+  { id: "nvidia", name: "Nvidia NIM", model: "meta/llama-3.3-70b-instruct", keyEnv: "NVIDIA_API_KEY", desc: "Nvidia Enterprise Cloud AI" },
+  { id: "together", name: "Together AI", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", keyEnv: "TOGETHER_API_KEY", desc: "Open-source Model Hub" },
+  { id: "cohere", name: "Cohere", model: "command-r-plus", keyEnv: "COHERE_API_KEY", desc: "Command R+ · Reasoning" },
+  { id: "mistral", name: "Mistral", model: "mistral-small-latest", keyEnv: "MISTRAL_API_KEY", desc: "1M tokens/day · Pixtral" },
+  { id: "cerebras", name: "Cerebras", model: "llama-3.3-70b", keyEnv: "CEREBRAS_API_KEY", desc: "Ultra-fast Wafer Inference" },
+  { id: "openrouter", name: "OpenRouter", model: "meta-llama/llama-3.3-70b-instruct:free", keyEnv: "OPENROUTER_API_KEY", desc: "100+ Free & Paid Models" },
+  { id: "deepseek", name: "DeepSeek", model: "deepseek-chat", keyEnv: "DEEPSEEK_API_KEY", desc: "DeepSeek V3 / R1" },
+  { id: "ollama", name: "Ollama (Local)", model: "llama3.2:3b", keyEnv: "OLLAMA_API_KEY", desc: "100% Offline Local Models" },
   { id: "zai", name: "Z.ai", model: "glm-4-flash", keyEnv: "ZAI_API_KEY", desc: "GLM · 100/day" },
-  { id: "deepseek", name: "DeepSeek", model: "deepseek-chat", keyEnv: "DEEPSEEK_API_KEY", desc: "Coding expert" },
   { id: "omniroute", name: "OmniRoute", model: "gemini-2.5-flash", keyEnv: "OMNIROUTE_API_KEY", desc: "Local API Router" },
 ];
 

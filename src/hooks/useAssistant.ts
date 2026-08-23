@@ -26,6 +26,7 @@ export function useAssistant() {
   const reconnectDelay = useRef(1000);
   const reconnectTimer = useRef<number | null>(null);
   const streamId = useRef<string | null>(null);
+  const lastSpokenRef = useRef<{ text: string; time: number }>({ text: "", time: 0 });
 
   const store = useStore;
 
@@ -64,18 +65,27 @@ export function useAssistant() {
 
   const triggerTTS = useCallback(
     (text: string) => {
+      const clean = text.trim();
+      if (!clean) return;
+      const now = Date.now();
+      // Prevent repeating the exact same utterance within 3.5 seconds
+      if (lastSpokenRef.current.text === clean && now - lastSpokenRef.current.time < 3500) {
+        return;
+      }
+      lastSpokenRef.current = { text: clean, time: now };
+
       const ttsEngine = store.getState().settings.ttsEngine || "edge";
       if (ttsEngine === "none") return;
       if (ttsEngine === "webspeech") {
-        speakWithBrowser(text);
+        speakWithBrowser(clean);
         return;
       }
       if (ws.current?.readyState === WebSocket.OPEN) {
         const lang = store.getState().settings.voiceSettings.language || "hi-IN";
         const voice = lang === "en-US" ? "en-US-JennyNeural" : "hi-IN-SwaraNeural";
-        ws.current.send(JSON.stringify({ type: "tts_speak", params: { text, voice, engine: ttsEngine } }));
+        ws.current.send(JSON.stringify({ type: "tts_speak", params: { text: clean, voice, engine: ttsEngine } }));
       } else {
-        speakWithBrowser(text);
+        speakWithBrowser(clean);
       }
     },
     [speakWithBrowser, store]
@@ -104,7 +114,16 @@ export function useAssistant() {
     store.getState().addMessage({ role: "user", content: text });
     store.getState().incCommands();
 
-    const result = parseCommand(text);
+    let result = parseCommand(text);
+    const isAgentMode = store.getState().settings.agentModeEnabled;
+
+    if (isAgentMode && result.parsed) {
+      // In Agent Mode, pass web searches, research, complex file creation to autonomous Agent Loop
+      const isSimpleHardware = ["volume", "screen", "system"].includes(result.parsed.category) && !text.toLowerCase().includes("summary") && !text.toLowerCase().includes("research");
+      if (!isSimpleHardware) {
+        result = { parsed: null, reply: "", isLLM: true };
+      }
+    }
 
     if (result.parsed && result.parsed.needsConfirmation) {
       store.getState().setPendingConfirmation({
@@ -142,7 +161,7 @@ export function useAssistant() {
       const connected = store.getState().isConnected;
       if (connected && ws.current?.readyState === WebSocket.OPEN) {
         if (result.reply) {
-          ws.current.send(JSON.stringify({ type: "tts_speak", params: { text: result.reply, engine: store.getState().settings.ttsEngine } }));
+          triggerTTS(result.reply);
         }
         const msg: WSMessage = {
           type: "command",
@@ -181,6 +200,9 @@ export function useAssistant() {
           text, 
           provider, 
           api_key: apiKey, 
+          api_keys: store.getState().settings.apiKeys,
+          provider_models: store.getState().settings.providerModels || {},
+          custom_providers: store.getState().settings.customProviders || [],
           system_prompt: systemPrompt, 
           history,
           obsidianEnabled: store.getState().settings.obsidianEnabled,
@@ -346,6 +368,12 @@ export function useAssistant() {
       if ((msg as any).data) {
         store.getState().loadAppData((msg as any).data);
       }
+    } else if ((msg as any).type === "test_provider_result") {
+      const p = (msg as any).provider;
+      const res = (msg as any).data;
+      if (p && res) {
+        store.getState().setApiHealth(p, res);
+      }
     } else if ((msg as any).type === "response") {
       // Data came back from the bridge → populate the store
       const data = msg.data as any;
@@ -359,12 +387,6 @@ export function useAssistant() {
         store.getState().addToast({ type: "error", message: msg.message });
       } else if (msg.message) {
         streamText(msg.message, "pika");
-        // Auto-speak short command responses naturally
-        const isShort = msg.message.length < 120;
-        const isNotList = !msg.message.includes("\n") || msg.message.split("\n").length < 4;
-        if (isShort && isNotList) {
-          triggerTTS(msg.message);
-        }
       }
     }
   }, [store, processInput]);

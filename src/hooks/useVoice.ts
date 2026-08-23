@@ -111,12 +111,17 @@ export function useVoice(onFinal: (text: string) => void, sendRaw?: (msg: any) =
               if (e.results[i].isFinal) final += t;
               else interim += t;
             }
-            if (interim || final) {
-              setPartial(interim || final);
+            const current = (interim || final).trim();
+            if (current) {
+              setPartial(current);
             }
             if (final) {
-              onFinal(final.trim()); // Process the command/query
-              setPartial(""); // Clear partial after final
+              const cleaned = final.trim();
+              if (/(?:hey|hello|namaste|suno|oye)?\s*pika\b/i.test(cleaned)) {
+                try { sounds.chime(); } catch {}
+              }
+              onFinal(cleaned);
+              setPartial("");
             }
           };
           rec.onerror = (e: any) => {

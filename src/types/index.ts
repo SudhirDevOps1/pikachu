@@ -114,10 +114,23 @@ export interface AppSettings {
   accentColor: string;
   secondaryAccentColor: string;
   customProviders: CustomProvider[];
+  customSubAgents?: CustomSubAgent[];
   agentModeEnabled: boolean;
   obsidianEnabled: boolean;
   obsidianUrl: string;
   obsidianApiKey: string;
+}
+
+export interface CustomSubAgent {
+  id: string;
+  name: string;
+  role: string;
+  desc: string;
+  provider: string;
+  model: string;
+  systemPrompt?: string;
+  tools: string[];
+  enabled: boolean;
 }
 
 export interface TokenUsage {
@@ -133,6 +146,7 @@ export interface ProviderHealth {
   latencyMs?: number;
   error?: string;
   checkedAt?: string;
+  models?: string[];
 }
 
 // User-defined custom AI provider (fully OpenAI-compatible endpoint)

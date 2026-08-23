@@ -91,6 +91,7 @@ interface AssistantState {
   setApiHealth: (provider: string, health: import("@/types").ProviderHealth) => void;
   tokenUsage: Record<string, TokenUsage>;
   addTokenUsage: (provider: string, usage: TokenUsage) => void;
+  resetTokenUsage: () => void;
 
   // Active Engines
   activeSttEngine: string;
@@ -109,6 +110,8 @@ interface AssistantState {
   setConnection: (status: AssistantState["connectionStatus"]) => void;
   setProcesses: (procs: ProcessInfo[]) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp"> & { id?: string }) => string;
+  updateMessageContent: (id: string, content: string) => void;
+  deleteMessage: (id: string) => void;
   appendToMessage: (id: string, chunk: string) => void;
   finalizeMessage: (id: string) => void;
   clearMessages: () => void;
@@ -184,6 +187,14 @@ export const useStore = create<AssistantState>()((set) => ({
     }));
     return id;
   },
+  updateMessageContent: (id, content) =>
+    set((s) => ({
+      messages: s.messages.map((m) => (m.id === id ? { ...m, content } : m)),
+    })),
+  deleteMessage: (id) =>
+    set((s) => ({
+      messages: s.messages.filter((m) => m.id !== id),
+    })),
   appendToMessage: (id, chunk) =>
     set((s) => ({
       messages: s.messages.map((m) =>
@@ -228,20 +239,36 @@ export const useStore = create<AssistantState>()((set) => ({
   setApiHealth: (provider, health) =>
     set((s) => ({ apiHealth: { ...s.apiHealth, [provider]: health } })),
 
-  tokenUsage: {},
+  tokenUsage: (() => {
+    try {
+      const saved = localStorage.getItem("pika_token_usage");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  })(),
   addTokenUsage: (provider, usage) =>
     set((s) => {
       const prev = s.tokenUsage[provider] || { prompt: 0, completion: 0, total: 0 };
-      return {
-        tokenUsage: {
-          ...s.tokenUsage,
-          [provider]: {
-            prompt: prev.prompt + usage.prompt,
-            completion: prev.completion + usage.completion,
-            total: prev.total + usage.total,
-          },
+      const updated = {
+        ...s.tokenUsage,
+        [provider]: {
+          prompt: prev.prompt + usage.prompt,
+          completion: prev.completion + usage.completion,
+          total: prev.total + usage.total,
         },
       };
+      try {
+        localStorage.setItem("pika_token_usage", JSON.stringify(updated));
+      } catch {}
+      return { tokenUsage: updated };
+    }),
+  resetTokenUsage: () =>
+    set(() => {
+      try {
+        localStorage.removeItem("pika_token_usage");
+      } catch {}
+      return { tokenUsage: {} };
     }),
 
   drives: [],
@@ -257,12 +284,27 @@ export const useStore = create<AssistantState>()((set) => ({
   activeLlmEngine: "None",
   setEngines: (stt, tts, llm) => set({ activeSttEngine: stt, activeTtsEngine: tts, activeLlmEngine: llm }),
   
-  loadAppData: (data) => set((s) => ({
-    ...s,
-    ...data,
-    settings: {
-      ...s.settings,
-      ...(data.settings || {})
-    }
-  })),
+  loadAppData: (data) => set((s) => {
+    const mergedTokens = {
+      ...s.tokenUsage,
+      ...(data.tokenUsage || {}),
+    };
+    try {
+      localStorage.setItem("pika_token_usage", JSON.stringify(mergedTokens));
+    } catch {}
+    return {
+      ...s,
+      ...data,
+      tokenUsage: mergedTokens,
+      settings: {
+        ...s.settings,
+        ...(data.settings || {}),
+        providerModels: {
+          ...(s.settings.providerModels || {}),
+          ...(data.settings?.providerModels || {}),
+        },
+        customSubAgents: data.settings?.customSubAgents || s.settings.customSubAgents || [],
+      }
+    };
+  }),
 }));

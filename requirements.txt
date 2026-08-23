@@ -1,43 +1,29 @@
 # === Core (required) ===
 websockets>=12.0
 
-# === Voice: STT (offline Hindi/English) ===
+# === Voice: STT & TTS ===
 vosk>=0.3.45
-
-# === Voice: TTS (Edge TTS primary + Piper + pyttsx3 offline fallback) ===
 edge-tts>=6.1.0
 piper-tts
-pyttsx3>=2.90
-torchaudio
-soundfile
 
-# === PC Automation ===
+# === PC Automation & Hardware Control ===
 pyautogui>=0.9.54
 pygetwindow>=0.0.9
 pyperclip>=1.8.2
-
-# === Agent Mode ===
-agent-mini
-
-# === System info ===
-psutil>=5.9.0
-
-# === HTTP / LLM / weather / translate ===
-requests>=2.31.0
-
-# === Env vars ===
-python-dotenv>=1.0.0
-
-# === Windows-specific (for pyttsx3 COM) ===
+screen_brightness_control>=0.27.0
+wmi>=1.5.1; sys_platform == "win32"
 pywin32>=306; sys_platform == "win32"
 
-# === Optional extras (uncomment as needed) ===
-# Pillow>=10.0.0          # screenshots thumbnails, image tools
-# pytesseract>=0.3.10     # OCR
-# PyPDF2>=3.0.0           # PDF tools
-# qrcode>=7.4.0           # QR generation
-# pygame>=2.5.0           # local music playback
-# keyboard>=0.13.5        # global hotkeys
-# mouse>=0.7.1            # macro recording
-# sounddevice>=0.4.6      # local mic capture (server-side STT)
-# numpy>=1.24.0
+# === Security & Vault Storage ===
+cryptography>=42.0.0
+
+# === Agent Mode & Research ===
+agent-mini
+Pillow>=10.0.0
+duckduckgo-search>=6.0.0
+
+# === System info & Networking ===
+psutil>=5.9.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0

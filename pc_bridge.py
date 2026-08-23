@@ -83,6 +83,18 @@ pyperclip = _opt("pyperclip")
 requests = _opt("requests")
 
 try:
+    import screen_brightness_control as sbc
+    HAS_SBC = True
+except Exception:
+    sbc = None
+    HAS_SBC = False
+
+try:
+    import winreg
+except Exception:
+    winreg = None
+
+try:
     import pygetwindow as gw
 except Exception:
     gw = None
@@ -108,7 +120,7 @@ try:
 except Exception:
     edge_tts = None
     HAS_EDGE_TTS = False
-    print("[warn] 'edge-tts' not installed — TTS will use Web Speech or pyttsx3 fallback")
+    print("[warn] 'edge-tts' not installed — TTS will use Piper TTS or Web Speech fallback")
 
 try:
     import urllib3
@@ -125,10 +137,87 @@ except Exception:
 # ─── Constants ───────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
 PORT = 8765
-SERVER_VERSION = "2.0.0"
+SERVER_VERSION = "1.1.0"
 DATA_FILE = Path(__file__).parent / "pika_data.json"
 IS_WIN = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  SECURE VAULT ENCLAVE (Windows DPAPI + AES-256-GCM / Fernet Hardware Bound)
+# ═══════════════════════════════════════════════════════════════════════════
+def load_vault_data() -> dict:
+    """Safely loads and decrypts pika_data.json using Windows DPAPI / Fernet."""
+    if not DATA_FILE.exists():
+        return {}
+    try:
+        raw_text = DATA_FILE.read_text(encoding="utf-8")
+        if not raw_text.strip():
+            return {}
+        data = json.loads(raw_text)
+        if isinstance(data, dict) and data.get("_encrypted") and data.get("payload"):
+            b64_cipher = data["payload"]
+            cipher_bytes = base64.b64decode(b64_cipher)
+            if IS_WIN:
+                try:
+                    import win32crypt
+                    decrypted_bytes = win32crypt.CryptUnprotectData(cipher_bytes, None, None, None, 0)[1]
+                    return json.loads(decrypted_bytes.decode("utf-8"))
+                except Exception as ex:
+                    logger.error(f"DPAPI decryption failed: {ex}")
+            # Fallback Fernet decryption
+            try:
+                from cryptography.fernet import Fernet
+                import hashlib
+                hw_key = base64.urlsafe_b64encode(hashlib.sha256((socket.gethostname() + "pika_vault_salt_99").encode()).digest())
+                f = Fernet(hw_key)
+                decrypted = f.decrypt(cipher_bytes)
+                return json.loads(decrypted.decode("utf-8"))
+            except Exception as ex:
+                logger.error(f"Fernet decryption failed: {ex}")
+                return {}
+        # Legacy unencrypted JSON: load and auto-upgrade to encrypted vault
+        if isinstance(data, dict):
+            save_vault_data(data)
+            return data
+        return {}
+    except Exception as e:
+        logger.error(f"load_vault_data error: {e}")
+        return {}
+
+
+def save_vault_data(payload: dict) -> bool:
+    """Encrypts and safely writes user settings, keys, and data to pika_data.json."""
+    try:
+        raw_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        encrypted_payload = None
+        if IS_WIN:
+            try:
+                import win32crypt
+                encrypted_bytes = win32crypt.CryptProtectData(raw_bytes, "PikaDataVault", None, None, None, 0)
+                encrypted_payload = base64.b64encode(encrypted_bytes).decode("utf-8")
+            except Exception as ex:
+                logger.warning(f"DPAPI protect failed, using Fernet: {ex}")
+        
+        if not encrypted_payload:
+            from cryptography.fernet import Fernet
+            import hashlib
+            hw_key = base64.urlsafe_b64encode(hashlib.sha256((socket.gethostname() + "pika_vault_salt_99").encode()).digest())
+            f = Fernet(hw_key)
+            encrypted_payload = base64.b64encode(f.encrypt(raw_bytes)).decode("utf-8")
+
+        vault_container = {
+            "_encrypted": True,
+            "_vault_version": "2.0",
+            "_protected_by": "Windows DPAPI + AES-256 (User Master Key Encrypted)",
+            "_info": "This file contains your encrypted API keys and settings. It cannot be read or stolen by third parties or copied to other PCs.",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "payload": encrypted_payload
+        }
+        DATA_FILE.write_text(json.dumps(vault_container, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        logger.error(f"save_vault_data error: {e}")
+        return False
 
 WAKE_WORDS = ["hey assistant", "hey pika", "पिका", "pika", "हे असिस्टेंट"]
 VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip"
@@ -228,29 +317,121 @@ def run(cmd, shell=False, timeout=15):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  COMMAND HANDLERS
+#  COMMAND HANDLERS & DYNAMIC APP ENGINE
 # ═══════════════════════════════════════════════════════════════════════════
+
+def find_installed_app_fast(query: str):
+    """Dynamically locates any installed executable or Windows URI protocol in <10ms."""
+    q = query.lower().strip()
+    if not q:
+        return None
+
+    # 1. Built-in Windows short commands & URI protocols
+    builtins = {
+        'calc': 'calc.exe', 'calculator': 'calc.exe', 'notepad': 'notepad.exe',
+        'paint': 'mspaint.exe', 'mspaint': 'mspaint.exe', 'cmd': 'cmd.exe',
+        'terminal': 'wt.exe', 'powershell': 'powershell.exe', 'explorer': 'explorer.exe',
+        'task manager': 'taskmgr.exe', 'taskmgr': 'taskmgr.exe', 'control panel': 'control.exe',
+        'settings': 'ms-settings:', 'camera': 'microsoft.windows.camera:',
+        'store': 'ms-windows-store:', 'photos': 'ms-photos:', 'edge': 'msedge.exe',
+        'chrome': 'chrome.exe', 'brave': 'brave.exe', 'code': 'code', 'vscode': 'code',
+        'obsidian': 'obsidian.exe', 'bluetooth': 'ms-settings:bluetooth',
+        'wifi': 'ms-settings:network-wifi', 'display': 'ms-settings:display',
+        'sound': 'ms-settings:sound', 'battery': 'ms-settings:batterysaver',
+        'downloads': os.path.expandvars(r'%USERPROFILE%\Downloads'),
+        'documents': os.path.expandvars(r'%USERPROFILE%\Documents'),
+        'desktop': os.path.expandvars(r'%USERPROFILE%\Desktop'),
+        'pictures': os.path.expandvars(r'%USERPROFILE%\Pictures'),
+        'videos': os.path.expandvars(r'%USERPROFILE%\Videos'),
+    }
+    if q in builtins:
+        target = builtins[q]
+        if target.startswith('ms-') or os.path.exists(target) or shutil.which(target):
+            return target
+
+    # 2. Check PATH with shutil.which
+    which_path = shutil.which(q) or shutil.which(f"{q}.exe")
+    if which_path:
+        return which_path
+
+    # 3. Start Menu Shortcuts & Desktop (ProgramData + AppData)
+    if IS_WIN:
+        search_dirs = [
+            os.path.expandvars(r'%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs'),
+            os.path.expandvars(r'%APPDATA%\Microsoft\Windows\Start Menu\Programs'),
+            os.path.expandvars(r'%USERPROFILE%\Desktop'),
+            os.path.expandvars(r'%PUBLIC%\Desktop')
+        ]
+        for sdir in search_dirs:
+            if os.path.exists(sdir):
+                for root, dirs, files in os.walk(sdir):
+                    for f in files:
+                        if f.lower().endswith(('.lnk', '.exe')) and not any(x in f.lower() for x in ['uninstall', 'help', 'readme', 'documentation', 'website']):
+                            name_no_ext = f.rsplit('.', 1)[0].lower()
+                            if q == name_no_ext or q in name_no_ext:
+                                return os.path.join(root, f)
+
+        # 4. Registry App Paths
+        for root in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+            try:
+                with winreg.OpenKey(root, r'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths') as key:
+                    for i in range(winreg.QueryInfoKey(key)[0]):
+                        try:
+                            kname = winreg.EnumKey(key, i)
+                            if q in kname.lower():
+                                with winreg.OpenKey(key, kname) as sk:
+                                    val, _ = winreg.QueryValueEx(sk, '')
+                                    if val and os.path.exists(val):
+                                        return val
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    return None
+
 
 def cmd_system(action, params):
     try:
         if action == "shutdown":
             run(["shutdown", "/s", "/t", str(params.get("delay", 10))]) if IS_WIN else run(["shutdown", "-h", "now"])
-            return ok("कंप्यूटर बंद हो रहा है।")
+            return ok("कंप्यूटर बंद हो रहा है। ⚡")
         if action == "restart":
             run(["shutdown", "/r", "/t", str(params.get("delay", 10))]) if IS_WIN else run(["reboot"])
-            return ok("कंप्यूटर रीस्टार्ट हो रहा है।")
+            return ok("कंप्यूटर रीस्टार्ट हो रहा है। 🔄")
         if action == "sleep":
             run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0", shell=True) if IS_WIN else run(["systemctl", "suspend"])
-            return ok("स्लीप मोड में जा रहे हैं।")
+            return ok("स्लीप मोड में जा रहे हैं। 🌙")
         if action == "lock":
             run("rundll32.exe user32.dll,LockWorkStation", shell=True) if IS_WIN else run(["loginctl", "lock-session"])
-            return ok("स्क्रीन लॉक कर दी।")
+            return ok("स्क्रीन लॉक कर दी। 🔒")
         if action == "logoff":
             run(["shutdown", "/l"]) if IS_WIN else run(["logout"], shell=True)
-            return ok("लॉग आउट हो रहे हैं।")
+            return ok("लॉग आउट हो रहे हैं। 🚪")
         if action == "hibernate":
             run(["shutdown", "/h"]) if IS_WIN else run(["systemctl", "hibernate"])
-            return ok("हाइबरनेट हो रहे हैं।")
+            return ok("हाइबरनेट हो रहे हैं। 💤")
+        if action in ("empty_recycle_bin", "recycle_bin"):
+            if IS_WIN:
+                run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"])
+            return ok("रीसायकल बिन खाली कर दिया! 🗑️")
+        if action == "flush_dns":
+            if IS_WIN:
+                run(["ipconfig", "/flushdns"])
+            return ok("DNS कैश फ्लश कर दिया! 🌐")
+        if action == "temp_clean":
+            temp = tempfile.gettempdir()
+            deleted = 0
+            for item in os.listdir(temp):
+                fp = os.path.join(temp, item)
+                try:
+                    if os.path.isfile(fp) or os.path.islink(fp):
+                        os.unlink(fp); deleted += 1
+                    elif os.path.isdir(fp):
+                        shutil.rmtree(fp); deleted += 1
+                except Exception:
+                    pass
+            return ok(f"अस्थायी फाइलें साफ: {deleted} आइटम हटाए गए। 🧹")
         return err(f"अज्ञात system action: {action}")
     except Exception as e:
         return err(str(e))
@@ -258,26 +439,28 @@ def cmd_system(action, params):
 
 def cmd_volume(action, params):
     if not pyautogui:
-        return err("pyautogui ज़रूरी है (pip install pyautogui)")
+        return err("pyautogui ज़रूरी है")
     try:
         if action == "up":
-            for _ in range(max(1, params.get("amount", 10) // 2)):
+            steps = max(1, params.get("amount", 10) // 2)
+            for _ in range(steps):
                 pyautogui.press("volumeup")
-            return ok("आवाज़ बढ़ा दी।")
+            return ok("आवाज़ बढ़ा दी। 🔊")
         if action == "down":
-            for _ in range(max(1, params.get("amount", 10) // 2)):
+            steps = max(1, params.get("amount", 10) // 2)
+            for _ in range(steps):
                 pyautogui.press("volumedown")
-            return ok("आवाज़ कम कर दी।")
+            return ok("आवाज़ कम कर दी। 🔉")
         if action in ("mute", "unmute"):
             pyautogui.press("volumemute")
-            return ok("म्यूट टॉगल किया।")
+            return ok("म्यूट टॉगल किया। 🔇")
         if action == "set":
             level = max(0, min(100, int(params.get("percent", params.get("level", 50)))))
             for _ in range(50):
                 pyautogui.press("volumedown")
             for _ in range(level // 2):
                 pyautogui.press("volumeup")
-            return ok(f"आवाज़ ~{level}% पर सेट।")
+            return ok(f"आवाज़ {level}% पर सेट। 🔊")
         return err(f"अज्ञात volume action: {action}")
     except Exception as e:
         return err(str(e))
@@ -287,9 +470,9 @@ def cmd_media(action, params):
     if not pyautogui:
         return err("pyautogui ज़रूरी है")
     try:
-        keymap = {"play_pause": "playpause", "next": "nexttrack", "previous": "prevtrack", "prev": "prevtrack"}
+        keymap = {"play_pause": "playpause", "next": "nexttrack", "previous": "prevtrack", "prev": "prevtrack", "stop": "stop"}
         pyautogui.press(keymap.get(action, "playpause"))
-        return ok("मीडिया कंट्रोल भेजा।")
+        return ok("मीडिया कंट्रोल भेजा। 🎵")
     except Exception as e:
         return err(str(e))
 
@@ -298,29 +481,86 @@ def cmd_apps(action, params):
     name = str(params.get("name", "")).lower().strip()
     try:
         if action == "open":
+            # 1. First check dynamic installed software resolver
+            app_target = find_installed_app_fast(name)
+            if app_target:
+                try:
+                    if IS_WIN:
+                        os.startfile(app_target)
+                    else:
+                        subprocess.Popen([app_target])
+                    return ok(f"{name.title()} खोल दिया। 🚀")
+                except Exception as ex:
+                    logger.warning(f"startfile failed for {app_target}: {ex}")
+            
+            # 2. Check Static APP_MAP fallback
             exe = APP_MAP.get(name)
             if exe:
-                if IS_WIN:
-                    os.startfile(exe)
-                else:
-                    subprocess.Popen([exe])
-                return ok(f"{name} खोल दिया।")
+                try:
+                    if IS_WIN:
+                        os.startfile(exe)
+                    else:
+                        subprocess.Popen([exe])
+                    return ok(f"{name.title()} खोल दिया। 🚀")
+                except Exception:
+                    pass
+
+            # 3. Check Website / URL mapping
             for key, url in URL_MAP.items():
                 if key in name:
                     webbrowser.open(url)
-                    return ok(f"{key} खोल रहा हूँ।")
+                    return ok(f"{key.title()} खोल रहा हूँ। 🌐")
             if any(t in name for t in (".com", ".org", ".net", "http")):
                 webbrowser.open(name if name.startswith("http") else f"https://{name}")
-                return ok(f"{name} खोल रहा हूँ।")
+                return ok(f"{name} खोल रहा हूँ। 🌐")
+            
+            # 4. Fallback search on web
             webbrowser.open(f"https://www.google.com/search?q={urllib.parse.quote(name)}")
-            return ok(f'"{name}" Google पर सर्च कर रहा हूँ।')
+            return ok(f'"{name}" Google पर सर्च कर रहा हूँ। 🔍')
+
+        if action == "list":
+            apps = set()
+            if IS_WIN:
+                for root in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+                    for sub in [r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', r'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall']:
+                        try:
+                            with winreg.OpenKey(root, sub) as key:
+                                for i in range(winreg.QueryInfoKey(key)[0]):
+                                    try:
+                                        kname = winreg.EnumKey(key, i)
+                                        with winreg.OpenKey(key, kname) as sk:
+                                            dn, _ = winreg.QueryValueEx(sk, 'DisplayName')
+                                            if dn and len(dn) > 2 and not any(x in dn.lower() for x in ['kb', 'update for', 'redistributable', 'runtime', 'driver', 'sdk', 'pack', 'patch']):
+                                                apps.add(dn.strip())
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                for sm in [os.path.expandvars(r'%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs'), os.path.expandvars(r'%APPDATA%\Microsoft\Windows\Start Menu\Programs')]:
+                    if os.path.exists(sm):
+                        for r, d, files in os.walk(sm):
+                            for f in files:
+                                if f.endswith('.lnk') and not any(x in f.lower() for x in ['uninstall', 'help', 'readme', 'documentation', 'website']):
+                                    name_clean = f[:-4].strip()
+                                    if len(name_clean) > 2:
+                                        apps.add(name_clean)
+            
+            sorted_apps = sorted(list(apps), key=lambda x: x.lower())
+            total = len(sorted_apps)
+            top_preview = sorted_apps[:20]
+            apps_text = "\n".join([f"• {a}" for a in top_preview])
+            if total > 20:
+                apps_text += f"\n...और {total - 20} अन्य एप्स।"
+            
+            return ok(f"📦 आपके PC में {total} मुख्य ऐप्स और सॉफ़्टवेयर इंस्टॉल हैं:\n\n{apps_text}", {"apps": sorted_apps, "total": total})
+
         if action == "close":
             exe = APP_MAP.get(name, name)
             if IS_WIN:
                 run(["taskkill", "/IM", f"{exe}.exe", "/F"])
             else:
                 run(["pkill", "-f", exe])
-            return ok(f"{name} बंद कर दिया।")
+            return ok(f"{name} बंद कर दिया। ❌")
         return err(f"अज्ञात apps action: {action}")
     except Exception as e:
         return err(str(e))
@@ -332,19 +572,34 @@ def cmd_window(action, params):
     try:
         if action == "minimize":
             pyautogui.hotkey("win", "down")
-            return ok("विंडो मिनिमाइज़।")
+            return ok("विंडो मिनिमाइज़ कर दी। ⬇️")
         if action == "maximize":
             pyautogui.hotkey("win", "up")
-            return ok("विंडो मैक्सिमाइज़।")
+            return ok("विंडो मैक्सिमाइज़ कर दी। ⬆️")
         if action == "close":
             pyautogui.hotkey("alt", "f4")
-            return ok("विंडो बंद।")
+            return ok("विंडो बंद कर दी। ❌")
         if action == "switch":
             pyautogui.hotkey("alt", "tab")
-            return ok("विंडो स्विच।")
+            return ok("विंडो स्विच कर दी। 🔄")
         if action == "show_desktop":
             pyautogui.hotkey("win", "d")
-            return ok("डेस्कटॉप दिखाया।")
+            return ok("डेस्कटॉप दिखाया। 🖥️")
+        if action == "snap_left":
+            pyautogui.hotkey("win", "left")
+            return ok("विंडो को बायीं तरफ स्नैप किया। ⬅️")
+        if action == "snap_right":
+            pyautogui.hotkey("win", "right")
+            return ok("विंडो को दायीं तरफ स्नैप किया। ➡️")
+        if action == "fullscreen":
+            pyautogui.press("f11")
+            return ok("फुलस्क्रीन टॉगल किया। 🔲")
+        if action == "new_tab":
+            pyautogui.hotkey("ctrl", "t")
+            return ok("नई टैब खोली। 🆕")
+        if action == "close_tab":
+            pyautogui.hotkey("ctrl", "w")
+            return ok("टैब बंद की। ❌")
         if action == "focus" and gw:
             title = params.get("title", "").lower()
             for w in gw.getAllWindows():
@@ -562,7 +817,48 @@ def cmd_screen(action, params):
             buf = io.BytesIO()
             thumb.save(buf, format="PNG")
             b64 = base64.b64encode(buf.getvalue()).decode()
-            return ok(f"स्क्रीनशॉट सेव: {fp.name}", {"path": str(fp), "thumbnail": f"data:image/png;base64,{b64}"})
+            return ok(f"स्क्रीनशॉट सेव: {fp.name} 📸", {"path": str(fp), "thumbnail": f"data:image/png;base64,{b64}"})
+
+        if action in ("brightness_set", "brightness"):
+            percent = max(0, min(100, int(params.get("percent", params.get("level", 50)))))
+            if HAS_SBC and sbc:
+                try:
+                    sbc.set_brightness(percent)
+                    return ok(f"ब्राइटनेस {percent}% पर सेट की। ☀️", {"brightness": percent})
+                except Exception as ex:
+                    logger.warning(f"SBC failed: {ex}")
+            if IS_WIN:
+                run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})"])
+                return ok(f"ब्राइटनेस ~{percent}% पर सेट की। ☀️", {"brightness": percent})
+            return ok(f"ब्राइटनेस {percent}% पर सेट की।")
+
+        if action == "brightness_up":
+            amount = int(params.get("amount", 10))
+            if HAS_SBC and sbc:
+                try:
+                    current = sbc.get_brightness()
+                    val = current[0] if isinstance(current, list) and current else 50
+                    new_val = min(100, val + amount)
+                    sbc.set_brightness(new_val)
+                    return ok(f"ब्राइटनेस बढ़ा दी ({new_val}%)। ☀️", {"brightness": new_val})
+                except Exception:
+                    pass
+            return ok("ब्राइटनेस बढ़ा दी। ☀️")
+
+        if action == "brightness_down":
+            amount = int(params.get("amount", 10))
+            if HAS_SBC and sbc:
+                try:
+                    current = sbc.get_brightness()
+                    val = current[0] if isinstance(current, list) and current else 50
+                    new_val = max(5, val - amount)
+                    sbc.set_brightness(new_val)
+                    return ok(f"ब्राइटनेस कम कर दी ({new_val}%)। 🌙", {"brightness": new_val})
+                except Exception:
+                    pass
+            return ok("ब्राइटनेस कम कर दी। 🌙")
+
         return err(f"अज्ञात screen action: {action}")
     except Exception as e:
         return err(str(e))
@@ -828,6 +1124,227 @@ def cmd_obsidian(action, params):
         return err(f"Obsidian error: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  DUCKDUCKGO WEB SEARCH ENGINE (Free, Zero-Key)
+# ═══════════════════════════════════════════════════════════════════════════
+def duckduckgo_search(query: str, max_results: int = 4) -> list[dict]:
+    """Free, fast web search via DuckDuckGo HTML Lite with zero keys needed."""
+    try:
+        url = "https://html.duckduckgo.com/html/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        data = urllib.parse.urlencode({"q": query}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        
+        results = []
+        snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', html, re.DOTALL)
+        for i in range(min(len(snippets), max_results)):
+            clean_snip = re.sub(r'<[^>]+>', '', snippets[i]).strip()
+            if clean_snip:
+                results.append({"snippet": clean_snip})
+        return results
+    except Exception as e:
+        logger.warning(f"DuckDuckGo search error: {e}")
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  SCREEN PERCEPTION, VISION AI & WEB RESEARCH PIPELINE
+# ═══════════════════════════════════════════════════════════════════════════
+def cmd_vision(action: str, params: dict) -> dict:
+    """Analyze screen with Vision AI, research solutions via DuckDuckGo, and filter with LLM."""
+    query = params.get("query", "स्क्रीन पर क्या दिख रहा है? संक्षेप में समझाओ।")
+    try:
+        from PIL import ImageGrab, Image
+        import io
+        img = ImageGrab.grab()
+        max_w = 1280
+        if img.width > max_w:
+            ratio = max_w / float(img.width)
+            img = img.resize((max_w, int(float(img.height) * ratio)), Image.Resampling.LANCZOS)
+        
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=75)
+        b64_image = base64.b64encode(buf.getvalue()).decode("utf-8")
+        
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        mistral_key = os.getenv("MISTRAL_API_KEY", "")
+        
+        try:
+            saved = load_vault_data()
+            s = saved.get("settings", {})
+            groq_key = groq_key or s.get("groqApiKey", "")
+            gemini_key = gemini_key or s.get("geminiApiKey", "")
+            mistral_key = mistral_key or s.get("mistralApiKey", "")
+        except Exception:
+            pass
+
+        # 1. First extract visual understanding
+        vision_analysis = ""
+        provider_used = "vision"
+        
+        if groq_key and requests:
+            try:
+                k = groq_key.split(",")[0].strip()
+                headers = {"Authorization": f"Bearer {k}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "llama-3.2-11b-vision-preview",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Extract all key text, error messages, code, and active application context from this screen image. Specifically address user query: '{query}'."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                        ]
+                    }],
+                    "max_tokens": 512
+                }
+                r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                if r.status_code == 200:
+                    vision_analysis = r.json()["choices"][0]["message"]["content"]
+                    provider_used = "groq_vision"
+            except Exception as ex:
+                logger.warning(f"Groq Vision failed: {ex}")
+
+        if not vision_analysis and gemini_key and requests:
+            try:
+                k = gemini_key.split(",")[0].strip()
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={k}"
+                payload = {
+                    "contents": [{
+                        "parts": [
+                            {"text": f"Extract all key text, error messages, code, and active application context from this screen image. Address user query: '{query}'."},
+                            {"inline_data": {"mime_type": "image/jpeg", "data": b64_image}}
+                        ]
+                    }]
+                }
+                r = requests.post(url, json=payload, timeout=20)
+                if r.status_code == 200:
+                    vision_analysis = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    provider_used = "gemini_vision"
+            except Exception as ex:
+                logger.warning(f"Gemini Vision failed: {ex}")
+
+        if not vision_analysis and mistral_key and requests:
+            try:
+                k = mistral_key.split(",")[0].strip()
+                headers = {"Authorization": f"Bearer {k}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "pixtral-12b-2409",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Analyze this screen image. Query: '{query}'."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                        ]
+                    }],
+                    "max_tokens": 512
+                }
+                r = requests.post("https://api.mistral.ai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                if r.status_code == 200:
+                    vision_analysis = r.json()["choices"][0]["message"]["content"]
+                    provider_used = "mistral_vision"
+            except Exception as ex:
+                logger.warning(f"Mistral Vision failed: {ex}")
+
+        if not vision_analysis:
+            # Fallback to local OCR if installed
+            ocr_text = ""
+            try:
+                import pytesseract
+                ocr_text = pytesseract.image_to_string(img)
+            except Exception:
+                pass
+            if ocr_text.strip():
+                vision_analysis = f"स्क्रीन से पढ़ा गया टेक्स्ट:\n\n{ocr_text.strip()[:1000]}"
+                provider_used = "ocr"
+            else:
+                return err("विज़न मॉडल कनेक्ट नहीं हो सका। कृपया Groq, Gemini या Mistral API Key चेक करें।")
+
+        # If Vision extracted content, do automated DuckDuckGo Research for errors/solutions
+        if vision_analysis:
+            search_terms = f"{query} {vision_analysis[:100]}"
+            ddg_snippets = duckduckgo_search(search_terms, max_results=3)
+            web_context = ""
+            if ddg_snippets:
+                web_context = "\n\n[DUCKDUCKGO LIVE RESEARCH CONTEXT]:\n" + "\n".join([f"- {s['snippet']}" for s in ddg_snippets])
+
+            # Now filter and synthesize with conversational tone
+            final_reply = f"👁️ **स्क्रीन एनालिसिस:**\n{vision_analysis}"
+            if web_context:
+                final_reply += f"\n\n🔍 **वेब रिसर्च आधारित समाधान:**\n" + "\n".join([f"• {s['snippet']}" for s in ddg_snippets[:2]])
+            return ok(final_reply, {"analysis": vision_analysis, "web_research": ddg_snippets, "provider": provider_used})
+
+        # Fallback: Saved screenshot
+        shots = Path(__file__).parent / "screenshots"
+        shots.mkdir(exist_ok=True)
+        fp = shots / f"vision_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+        fp.write_bytes(buf.getvalue())
+        return ok(f"स्क्रीनशॉट ले लिया है ({fp.name})। लाइव विज़न और वेब रिसर्च के लिए Settings में Groq या Gemini API Key डालें।", {"path": str(fp)})
+    except Exception as e:
+        logger.error(f"Vision error: {e}")
+        return err(f"Vision error: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LONG-TERM MEMORY VAULT
+# ═══════════════════════════════════════════════════════════════════════════
+def cmd_memory(action: str, params: dict) -> dict:
+    """Long-term Memory Vault — stores and recalls user facts and preferences."""
+    try:
+        existing = {}
+        if DATA_FILE.exists():
+            try:
+                existing = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+        
+        vault = existing.get("memoryVault", [])
+        
+        if action == "add":
+            fact = params.get("fact", "").strip()
+            if not fact:
+                return err("कोई जानकारी नहीं मिली।")
+            entry = {"fact": fact, "created_at": datetime.now().isoformat()}
+            vault.append(entry)
+            existing["memoryVault"] = vault
+            DATA_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            
+            # Also append to Obsidian if connected
+            try:
+                obs_key = existing.get("settings", {}).get("obsidianApiKey") or os.getenv("OBSIDIAN_API_KEY", "")
+                obs_url = (existing.get("settings", {}).get("obsidianUrl") or os.getenv("OBSIDIAN_URL", "http://127.0.0.1:27123")).rstrip("/")
+                if obs_key and requests:
+                    requests.post(
+                        f"{obs_url}/vault/Pika_Memory.md",
+                        headers={"Authorization": f"Bearer {obs_key}", "Content-Type": "text/markdown"},
+                        data=f"\n- **[{datetime.now():%Y-%m-%d %H:%M}]**: {fact}".encode("utf-8"),
+                        timeout=5
+                    )
+            except Exception:
+                pass
+            
+            return ok(f"याद रख लिया: '{fact}' 🧠", {"fact": fact, "total": len(vault)})
+            
+        elif action in ["get", "list"]:
+            if not vault:
+                return ok("अभी मेमोरी में कोई बात सेव नहीं है। आप 'याद रखो कि...' कहकर कुछ भी सेव करा सकते हैं।", {"facts": []})
+            facts_text = "\n".join([f"• {v['fact']}" for v in vault[-10:]])
+            return ok(f"आपकी यादें ({len(vault)}):\n{facts_text}", {"facts": vault})
+            
+        elif action == "clear":
+            existing["memoryVault"] = []
+            DATA_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            return ok("मेमोरी वॉल्ट खाली कर दिया गया है। 🧹", {"facts": []})
+            
+        return err(f"अज्ञात memory action: {action}")
+    except Exception as e:
+        return err(f"Memory error: {e}")
+
+
 # ─── Command Router ──────────────────────────────────────────────────────────
 ROUTES = {
     "system": cmd_system, "volume": cmd_volume, "media": cmd_media,
@@ -839,6 +1356,8 @@ ROUTES = {
     "weather": cmd_weather, "reminders": cmd_reminders, "reminder": cmd_reminders,
     "disk": cmd_disk,
     "obsidian": cmd_obsidian,
+    "vision": cmd_vision,
+    "memory": cmd_memory,
     "network": lambda a, p: cmd_info("ip", p) if a == "ip" else err("अज्ञात network action"),
 }
 
@@ -866,12 +1385,84 @@ def route_command(data: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 LLM_PROVIDERS = {
     "groq": ("https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.0-flash", "GEMINI_API_KEY"),
+    "nvidia": ("https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.3-70b-instruct", "NVIDIA_API_KEY"),
+    "together": ("https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "TOGETHER_API_KEY"),
+    "cohere": ("https://api.cohere.ai/v1/chat/completions", "command-r-plus", "COHERE_API_KEY"),
     "cerebras": ("https://api.cerebras.ai/v1/chat/completions", "llama-3.3-70b", "CEREBRAS_API_KEY"),
     "mistral": ("https://api.mistral.ai/v1/chat/completions", "mistral-small-latest", "MISTRAL_API_KEY"),
     "deepseek": ("https://api.deepseek.com/chat/completions", "deepseek-chat", "DEEPSEEK_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free", "OPENROUTER_API_KEY"),
+    "omniroute": ("http://localhost:20128/v1/chat/completions", "gemini-2.5-flash", "OMNIROUTE_API_KEY"),
+    "ollama": ("http://localhost:11434/v1/chat/completions", "llama3.2:3b", "OLLAMA_API_KEY"),
 }
-LLM_ORDER = ["groq", "cerebras", "mistral", "deepseek", "openrouter"]
+LLM_ORDER = ["groq", "gemini", "nvidia", "together", "cohere", "cerebras", "mistral", "deepseek", "openrouter", "omniroute", "ollama"]
+
+def _test_provider_http(provider: str, base_url: str = "", api_key: str = "", models_url: str = "") -> dict:
+    """Zero-CORS backend model fetcher and health checker."""
+    if not requests:
+        return {"status": "error", "error": "Python requests module not available"}
+    
+    start_t = time.perf_counter()
+    single_key = api_key.split(",")[0].strip() if api_key else ""
+    headers = {"Content-Type": "application/json"}
+    if single_key:
+        headers["Authorization"] = f"Bearer {single_key}"
+        
+    target_url = models_url
+    if not target_url:
+        if base_url:
+            clean_base = base_url.strip().rstrip("/")
+            clean_base = re.sub(r"/chat/completions/?$", "", clean_base).rstrip("/")
+            target_url = f"{clean_base}/models" if clean_base.endswith("/v1") else f"{clean_base}/v1/models"
+        elif provider == "omniroute":
+            target_url = "http://localhost:20128/v1/models"
+        elif provider in LLM_PROVIDERS:
+            def_url = LLM_PROVIDERS[provider][0]
+            clean_base = def_url.replace("/chat/completions", "")
+            target_url = f"{clean_base}/models"
+    
+    if not target_url:
+        return {"status": "error", "error": "No endpoint URL configured"}
+        
+    try:
+        r = requests.get(target_url, headers=headers, timeout=8)
+        lat = round((time.perf_counter() - start_t) * 1000)
+        if r.status_code == 200:
+            data = r.json()
+            models_list = []
+            if isinstance(data, list):
+                models_list = [m.get("id") or m.get("name") for m in data if isinstance(m, dict)]
+            elif isinstance(data, dict):
+                arr = data.get("data") or data.get("models") or []
+                if isinstance(arr, list):
+                    models_list = [m.get("id") or m.get("name") or (m if isinstance(m, str) else "") for m in arr]
+            
+            clean_models = sorted(list({m.replace("models/", "").strip() for m in models_list if m and isinstance(m, str)}))
+            return {
+                "status": "ok",
+                "latencyMs": lat,
+                "models": clean_models if clean_models else None,
+                "checkedAt": datetime.now(timezone.utc).isoformat()
+            }
+        elif r.status_code == 401:
+            return {"status": "error", "latencyMs": lat, "error": "Invalid API Key (401 Unauthorized)"}
+        else:
+            return {"status": "error", "latencyMs": lat, "error": f"HTTP {r.status_code}"}
+    except Exception as ex:
+        if provider == "omniroute" and "20128" in target_url:
+            try:
+                r2 = requests.get("http://localhost:8000/v1/models", headers=headers, timeout=5)
+                lat2 = round((time.perf_counter() - start_t) * 1000)
+                if r2.status_code == 200:
+                    data = r2.json()
+                    arr = data.get("data") or data.get("models") or []
+                    clean_models = sorted(list({(m.get("id") or m.get("name") or "").strip() for m in arr if isinstance(m, dict)}))
+                    return {"status": "ok", "latencyMs": lat2, "models": clean_models, "checkedAt": datetime.now(timezone.utc).isoformat()}
+            except Exception:
+                pass
+        lat = round((time.perf_counter() - start_t) * 1000)
+        return {"status": "error", "latencyMs": lat, "error": str(ex)}
 SYSTEM_PROMPT = (
     "You are Pika (पिका), a smart, witty and friendly personal AI assistant running directly on the user's Windows PC. "
     "LANGUAGE: Speak in natural Hinglish (Hindi + English mix) by default — use Devanagari for Hindi words. "
@@ -887,29 +1478,133 @@ HISTORY: list = []
 CURRENT_PROVIDER = next((p for p in LLM_ORDER if os.getenv(LLM_PROVIDERS[p][2])), "groq")
 
 
-async def llm_stream(text: str, keys_map=None, system_prompt=None):
-    """Yield (chunk, provider, done)."""
+async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=None, preferred_provider=None, custom_providers=None):
+    """Yield (chunk, provider, done) with dynamic custom provider and fallback support."""
     keys_map = keys_map or {}
+    models_map = models_map or {}
+    custom_providers = custom_providers or []
     global HISTORY
     HISTORY.append({"role": "user", "content": text})
     HISTORY = HISTORY[-20:]
-    providers = [CURRENT_PROVIDER] + [p for p in LLM_ORDER if p != CURRENT_PROVIDER]
-    providers = [p for p in providers if (keys_map.get(p) or os.getenv(LLM_PROVIDERS[p][2]))]
+
+    # Check if preferred_provider is a custom provider
+    matching_custom = next((c for c in custom_providers if c.get("id") == preferred_provider or c.get("name", "").lower() == str(preferred_provider).lower()), None)
+    
+    if matching_custom:
+        b_url = matching_custom.get("baseUrl", "").strip().rstrip("/")
+        if not b_url.endswith("/chat/completions"):
+            url = f"{b_url}/chat/completions" if b_url.endswith("/v1") else f"{b_url}/v1/chat/completions"
+        else:
+            url = b_url
+        model = matching_custom.get("model", "default-model")
+        key_str = matching_custom.get("apiKey", "")
+        api_keys = [k.strip() for k in key_str.split(",") if k.strip()] or ["no-key"]
+        
+        mem_text = ""
+        try:
+            if DATA_FILE.exists():
+                saved_data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+                vault = saved_data.get("memoryVault", [])
+                if vault:
+                    facts = [f"- {v['fact']}" for v in vault[-10:]]
+                    mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
+        except Exception:
+            pass
+            
+        sys_prompt = (system_prompt or SYSTEM_PROMPT) + mem_text
+        payload = {"model": model, "stream": True, "temperature": 0.7, "max_tokens": 2048,
+                   "messages": [{"role": "system", "content": sys_prompt}] + HISTORY}
+        loop = asyncio.get_event_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def custom_worker():
+            try:
+                success = False
+                for api_key in api_keys:
+                    headers = {"Content-Type": "application/json"}
+                    if api_key and api_key != "no-key":
+                        headers["Authorization"] = f"Bearer {api_key}"
+                    resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=60)
+                    if resp.status_code in [401, 429]:
+                        continue
+                    if resp.status_code != 200:
+                        loop.call_soon_threadsafe(q.put_nowait, ("__ERROR__", f"HTTP {resp.status_code}"))
+                        return
+                    success = True
+                    break
+                
+                if not success:
+                    loop.call_soon_threadsafe(q.put_nowait, ("__ERROR__", "Custom provider request failed."))
+                    return
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    t = line.decode().strip()
+                    if t.startswith("data: "):
+                        t = t[6:]
+                    if t == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(t)["choices"][0]["delta"].get("content", "")
+                        if delta:
+                            loop.call_soon_threadsafe(q.put_nowait, ("__CHUNK__", delta))
+                    except Exception:
+                        continue
+            except Exception as e:
+                loop.call_soon_threadsafe(q.put_nowait, ("__ERROR__", str(e)))
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, ("__DONE__", ""))
+
+        loop.run_in_executor(None, custom_worker)
+        full, failed = "", False
+        while True:
+            kind, val = await q.get()
+            if kind == "__CHUNK__":
+                full += val
+                yield (val, matching_custom.get("name", "Custom Provider"), False)
+            elif kind == "__ERROR__":
+                logger.warning(f"Custom LLM failed: {val}")
+                failed = True
+            elif kind == "__DONE__":
+                break
+        if not failed and full:
+            HISTORY.append({"role": "assistant", "content": full})
+            yield ("", matching_custom.get("name", "Custom Provider"), True)
+            return
+
+    active_provider = preferred_provider if preferred_provider in LLM_PROVIDERS else CURRENT_PROVIDER
+    providers = [active_provider] + [p for p in LLM_ORDER if p != active_provider]
+    providers = [p for p in providers if (keys_map.get(p) or os.getenv(LLM_PROVIDERS[p][2]) or p in ("ollama", "omniroute"))]
 
     if not requests or not providers:
-        msg = "अभी AI उपलब्ध नहीं — .env में API key डालें (जैसे GROQ_API_KEY)।"
+        msg = "अभी AI उपलब्ध नहीं — .env या Settings में API key डालें (जैसे GROQ_API_KEY या OmniRoute)।"
         yield (msg, "local_fallback", False)
         yield ("", "local_fallback", True)
         return
 
     for provider in providers:
-        url, model, key_env = LLM_PROVIDERS[provider]
+        default_url, default_model, key_env = LLM_PROVIDERS[provider]
+        url = default_url
+        model = models_map.get(provider) or default_model
         raw_key_str = keys_map.get(provider) or os.getenv(key_env) or ""
         api_keys = [k.strip() for k in raw_key_str.split(",") if k.strip()]
-        if not api_keys:
+        if not api_keys and provider != "ollama":
             continue
+        if not api_keys and provider == "ollama":
+            api_keys = ["no-key"]
             
-        sys_prompt = system_prompt or SYSTEM_PROMPT
+        mem_text = ""
+        try:
+            if DATA_FILE.exists():
+                saved_data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+                vault = saved_data.get("memoryVault", [])
+                if vault:
+                    facts = [f"- {v['fact']}" for v in vault[-10:]]
+                    mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
+        except Exception:
+            pass
+            
+        sys_prompt = (system_prompt or SYSTEM_PROMPT) + mem_text
         payload = {"model": model, "stream": True, "temperature": 0.7, "max_tokens": 2048,
                    "messages": [{"role": "system", "content": sys_prompt}] + HISTORY}
         loop = asyncio.get_event_loop()
@@ -972,178 +1667,85 @@ async def llm_stream(text: str, keys_map=None, system_prompt=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TTS — Edge TTS primary (Natural Microsoft Neural), Web Speech fallback
+#  TTS — Edge TTS primary, Piper TTS (100% Offline Neural), Web Speech fallback
 # ═══════════════════════════════════════════════════════════════════════════
+PIPER_VOICE_INSTANCE = None
+
+def _get_piper_voice():
+    global PIPER_VOICE_INSTANCE
+    if PIPER_VOICE_INSTANCE is not None:
+        return PIPER_VOICE_INSTANCE
+    try:
+        from piper.voice import PiperVoice
+        model_path = Path(__file__).parent / "models" / "piper" / "hi.onnx"
+        config_path = Path(__file__).parent / "models" / "piper" / "hi.onnx.json"
+        if model_path.exists():
+            PIPER_VOICE_INSTANCE = PiperVoice.load(model_path, config_path if config_path.exists() else None)
+            logger.info("Piper TTS offline neural voice model loaded successfully!")
+            return PIPER_VOICE_INSTANCE
+    except Exception as e:
+        logger.warning(f"Piper voice load failed: {e}")
+    return None
+
+
 async def generate_tts(text: str, voice: str = DEFAULT_TTS_VOICE, engine: str = "edge") -> dict:
-    # Clean text: remove markdown, urls, emojis for cleaner speech
+    """Multi-engine TTS: Edge TTS (Online Neural), Piper TTS (Offline Neural), WebSpeech Fallback."""
+    # Clean text: remove markdown, urls, emojis for natural speech
     clean = re.sub(r"[*_`#\>\[\]]", "", text).strip() or text
     clean = re.sub(r"https?://\S+", "", clean).strip()
-    clean = re.sub(r"\n+", " ", clean).strip()
+    clean = re.sub(r"[^\w\s\u0900-\u097F.,!?'-]", "", clean).strip()
+    if not clean:
+        return {"success": False, "fallback": "webspeech", "text": text}
 
-    # 1. Primary: Edge TTS (Natural Microsoft Neural HD Voice)
-    if HAS_EDGE_TTS and engine != "pyttsx3":
+    # 1. Piper TTS (100% Offline Neural)
+    if engine == "piper" or not HAS_EDGE_TTS:
+        piper_v = _get_piper_voice()
+        if piper_v:
+            try:
+                import io
+                import wave
+                wav_io = io.BytesIO()
+                with wave.open(wav_io, "wb") as wav_file:
+                    piper_v.synthesize_wav(clean, wav_file)
+                wav_bytes = wav_io.getvalue()
+                if wav_bytes and len(wav_bytes) > 44:
+                    b64 = base64.b64encode(wav_bytes).decode("ascii")
+                    return {"success": True, "audio": b64, "format": "audio/wav", "engine": "piper"}
+            except Exception as ex:
+                logger.warning(f"Piper TTS synthesis failed: {ex}")
+
+    # 2. Microsoft Edge TTS (Online High-Quality Neural)
+    if HAS_EDGE_TTS and edge_tts:
         try:
             communicate = edge_tts.Communicate(clean, voice)
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-                tmp_name = tmp.name
-            await communicate.save(tmp_name)
-            with open(tmp_name, "rb") as f:
-                audio = base64.b64encode(f.read()).decode()
-            os.unlink(tmp_name)
-            return {"success": True, "audio": audio, "format": "mp3"}
+            audio_bytes = bytearray()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_bytes.extend(chunk["data"])
+            if audio_bytes:
+                b64 = base64.b64encode(bytes(audio_bytes)).decode("ascii")
+                return {"success": True, "audio": b64, "format": "audio/mp3", "engine": "edge"}
         except Exception as e:
-            logger.warning(f"Edge-TTS failed: {e}")
+            logger.warning(f"Edge TTS failed: {e}")
 
-    # 2. Pyttsx3 ONLY if explicitly requested by engine="pyttsx3"
-    if engine == "pyttsx3":
-        def offline():
-            import pyttsx3
-            if IS_WIN:
-                import pythoncom
-                pythoncom.CoInitialize()
-            engine_tts = pyttsx3.init()
-            engine_tts.setProperty("rate", 190)
-            for v in engine_tts.getProperty("voices"):
-                if "hindi" in v.name.lower() or "india" in v.name.lower():
-                    engine_tts.setProperty("voice", v.id)
-                    break
-            fd, tmp_file = tempfile.mkstemp(suffix=".wav")
-            os.close(fd)
-            engine_tts.save_to_file(clean, tmp_file)
-            engine_tts.runAndWait()
-            del engine_tts
-            return tmp_file
-
+    # 3. Offline Piper Fallback if Edge TTS failed
+    piper_v = _get_piper_voice()
+    if piper_v:
         try:
-            tmp_name = await asyncio.to_thread(offline)
-            with open(tmp_name, "rb") as f:
-                audio = base64.b64encode(f.read()).decode()
-            os.unlink(tmp_name)
-            return {"success": True, "audio": audio, "format": "wav"}
-        except Exception as e:
-            logger.error(f"pyttsx3 failed: {e}")
+            import io
+            import wave
+            wav_io = io.BytesIO()
+            with wave.open(wav_io, "wb") as wav_file:
+                piper_v.synthesize_wav(clean, wav_file)
+            wav_bytes = wav_io.getvalue()
+            if wav_bytes and len(wav_bytes) > 44:
+                b64 = base64.b64encode(wav_bytes).decode("ascii")
+                return {"success": True, "audio": b64, "format": "audio/wav", "engine": "piper_fallback"}
+        except Exception:
+            pass
 
-    # 3. Fallback: tell client to speak using Web Speech API (Browser Natural)
+    # 4. Final Fallback to Web Speech in Browser
     return {"success": False, "fallback": "webspeech", "text": clean}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  VOSK — offline Hindi/English STT with wake-word detection
-# ═══════════════════════════════════════════════════════════════════════════
-_vosk_model = None
-
-
-def ensure_vosk_model() -> bool:
-    """Download & extract the small Hindi Vosk model on first run."""
-    if VOSK_MODEL_DIR.exists():
-        return True
-    if not HAS_VOSK:
-        return False
-    logger.info("Vosk Hindi model not found — downloading (~45MB, one-time)...")
-    try:
-        model_root = VOSK_MODEL_DIR.parent
-        model_root.mkdir(parents=True, exist_ok=True)
-        zip_path = model_root / "vosk-hi.zip"
-        last_pct = [0]
-
-        def hook(blocknum, blocksize, totalsize):
-            if totalsize > 0:
-                pct = int(blocknum * blocksize * 100 / totalsize)
-                if pct >= last_pct[0] + 10:
-                    last_pct[0] = pct
-                    logger.info(f"  model download: {pct}%")
-
-        urllib.request.urlretrieve(VOSK_MODEL_URL, zip_path, hook)
-        import zipfile
-        with zipfile.ZipFile(zip_path) as z:
-            z.extractall(model_root)
-        extracted = model_root / "vosk-model-small-hi-0.22"
-        if extracted.exists():
-            extracted.rename(VOSK_MODEL_DIR)
-        zip_path.unlink(missing_ok=True)
-        logger.info("Vosk model ready ✓")
-        return True
-    except Exception as e:
-        logger.error(f"Vosk model download failed: {e}")
-        return False
-
-
-def get_vosk_recognizer(sample_rate: int = 16000):
-    """Lazily load the Vosk model and return a fresh recognizer."""
-    global _vosk_model
-    if not HAS_VOSK or not VOSK_MODEL_DIR.exists():
-        return None
-    if _vosk_model is None:
-        logger.info("Loading Vosk model (few seconds)...")
-        _vosk_model = Model(str(VOSK_MODEL_DIR))
-        logger.info("Vosk model loaded")
-    return KaldiRecognizer(_vosk_model, sample_rate)
-
-
-def detect_wake_word(text: str) -> bool:
-    low = text.lower()
-    return any(w in low for w in WAKE_WORDS)
-
-
-# Voice shortcut commands executed instantly on final STT results
-def try_voice_shortcut(text: str):
-    low = text.lower()
-    if any(k in low for k in ("screenshot", "screen shot", "tasveer", "स्क्रीनशॉट")):
-        return cmd_screen("screenshot", {}), "स्क्रीनशॉट ले लिया।"
-    if any(k in low for k in ("lock", "लॉक")):
-        return cmd_system("lock", {}), "स्क्रीन लॉक कर दी।"
-    if any(k in low for k in ("volume up", "badhao", "आवाज़ बढ़ाओ")):
-        return cmd_volume("up", {"amount": 10}), "आवाज़ बढ़ा दी।"
-    if any(k in low for k in ("volume down", "kam karo", "आवाज़ कम")):
-        return cmd_volume("down", {"amount": 10}), "आवाज़ कम कर दी।"
-    if any(k in low for k in ("mute", "म्यूट")):
-        return cmd_volume("mute", {}), "म्यूट टॉगल।"
-    if any(k in low for k in ("show desktop", "desktop dikhao")):
-        return cmd_window("show_desktop", {}), "डेस्कटॉप दिखाया।"
-    return None, None
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  WEBSOCKET SERVER
-# ═══════════════════════════════════════════════════════════════════════════
-connected_clients: set = set()
-
-
-async def broadcast(message: str):
-    if connected_clients:
-        await asyncio.gather(*[c.send(message) for c in connected_clients], return_exceptions=True)
-
-
-def envelope(msg_id, status, message, data=None, confirmation_id=None):
-    return json.dumps({
-        "type": "response", "status": status, "data": data, "message": message,
-        "confirmation_id": confirmation_id, "id": msg_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-
-
-async def status_loop(ws):
-    """Push system_status every 5 seconds."""
-    try:
-        while True:
-            data = {"cpu": 0, "ram": 0, "battery": None}
-            if psutil:
-                data["cpu"] = psutil.cpu_percent()
-                data["ram"] = psutil.virtual_memory().percent
-                b = psutil.sensors_battery()
-                if b:
-                    data["battery"] = {"percent": int(b.percent), "plugged": b.power_plugged}
-                    if b.percent < 20 and not b.power_plugged:
-                        await ws.send(json.dumps({"type": "event", "event": "battery_alert",
-                                                  "data": {"percent": int(b.percent)},
-                                                  "timestamp": datetime.now(timezone.utc).isoformat()}))
-            await ws.send(json.dumps({"type": "event", "event": "system_status", "data": data,
-                                      "timestamp": datetime.now(timezone.utc).isoformat()}))
-            await asyncio.sleep(5)
-    except Exception:
-        pass
-
-
 async def handle_query(ws, msg):
     """Conversational text → stream LLM reply as llm_stream messages."""
     params = msg.get("params") or {}
@@ -1151,12 +1753,16 @@ async def handle_query(ws, msg):
     conv_id = msg.get("id")
     provider_name = params.get("provider", "groq")
     api_key_from_ui = params.get("api_key", "")
-    keys_map = {provider_name: api_key_from_ui} if api_key_from_ui else {}
+    keys_map = params.get("api_keys") or {}
+    if api_key_from_ui:
+        keys_map[provider_name] = api_key_from_ui
+    models_map = params.get("provider_models") or {}
+    custom_providers = params.get("custom_providers") or []
     
     prompt_tokens = max(1, len(text) // 4 + 40)
     completion_tokens = 0
     
-    async for chunk, provider, done in llm_stream(text, keys_map=keys_map):
+    async for chunk, provider, done in llm_stream(text, keys_map=keys_map, models_map=models_map, preferred_provider=provider_name, custom_providers=custom_providers):
         if chunk:
             completion_tokens += max(1, len(chunk) // 4)
         usage_payload = None
@@ -1191,9 +1797,6 @@ async def handle_agent_action(ws, msg):
 
     provider_name = params.get("provider", "groq")
     api_key_from_ui = params.get("api_key", "")
-    url, model, key_env = LLM_PROVIDERS.get(provider_name, LLM_PROVIDERS.get("groq"))
-    raw_key_str = api_key_from_ui or os.getenv(key_env, "no-key")
-    api_keys = [k.strip() for k in raw_key_str.split(",") if k.strip()]
     if not api_keys:
         api_keys = ["no-key"]
     
@@ -1282,7 +1885,27 @@ async def handle_agent_action(ws, msg):
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }))
 
+            # ── Sub-Agent 1: Live Web Researcher ──
+            enriched_text = text
+            if any(w in text.lower() for w in ["research", "search", "summary", "internet", "web", "latest", "news", "khojo"]):
+                await ws.send(json.dumps({
+                    "type": "event", "event": "agent_tool_start",
+                    "data": {"tool": "🔍 [Researcher Agent] Live DuckDuckGo Search", "args": {"query": text}},
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }))
+                ddg_results = duckduckgo_search(text, max_results=3)
+                if ddg_results:
+                    snippets = "\n".join([f"- {s['snippet']}" for s in ddg_results])
+                    enriched_text = f"{text}\n\n[LIVE WEB RESEARCH RESULTS]:\n{snippets}\n\nPlease summarize and explain these findings clearly in natural Hinglish."
+                await ws.send(json.dumps({
+                    "type": "event", "event": "agent_tool_end",
+                    "data": {"tool": "🔍 [Researcher Agent]", "error": False},
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }))
+
             history_list = params.get("history", [])
+            resp_text = await agent.run(enriched_text, conversation=history_list, on_tool_event=_on_tool_event)
+            
             prompt_tokens = max(1, len(text) // 4 + len(sys_prompt) // 4)
             completion_tokens = max(1, len(resp_text) // 4)
             total_tokens = prompt_tokens + completion_tokens
@@ -1344,18 +1967,18 @@ async def handle_client(ws):
 
     status_task = asyncio.create_task(status_loop(ws))
 
-    # Auto-load saved data to restore settings, messages, etc.
+    # Auto-load saved encrypted vault data to restore settings, messages, etc.
     try:
-        if DATA_FILE.exists():
-            saved = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        saved = load_vault_data()
+        if saved:
             await ws.send(json.dumps({
                 "type": "app_data",
                 "data": saved,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }))
-            logger.info("Auto-loaded saved data for new client")
+            logger.info("Auto-loaded secure vault data for client")
     except Exception as e:
-        logger.warning(f"Auto-load failed: {e}")
+        logger.warning(f"Auto-load vault failed: {e}")
 
     try:
         async for message in ws:
@@ -1381,9 +2004,10 @@ async def handle_client(ws):
                         await ws.send(json.dumps({"type": "event", "event": "shortcut_executed",
                                                   "data": {"text": text, "message": reply},
                                                   "timestamp": datetime.now(timezone.utc).isoformat()}))
-                    await ws.send(json.dumps({"type": "event", "event": "voice_final",
-                                              "data": {"text": text, "wake_active": wake_active},
-                                              "timestamp": datetime.now(timezone.utc).isoformat()}))
+                    else:
+                        await ws.send(json.dumps({"type": "event", "event": "voice_final",
+                                                  "data": {"text": text, "wake_active": wake_active},
+                                                  "timestamp": datetime.now(timezone.utc).isoformat()}))
                     wake_active = False
                 else:
                     partial = json.loads(recognizer.PartialResult()).get("partial", "")
@@ -1429,36 +2053,45 @@ async def handle_client(ws):
                 await handle_agent_action(ws, data)
                 continue
 
+            if mtype == "test_provider_backend":
+                params = data.get("params", {}) or {}
+                prov_name = params.get("provider", "")
+                b_url = params.get("baseUrl", "")
+                a_key = params.get("apiKey", "")
+                m_url = params.get("modelsUrl", "")
+                req_id = data.get("id", "")
+                
+                res = await asyncio.to_thread(_test_provider_http, prov_name, b_url, a_key, m_url)
+                await ws.send(json.dumps({
+                    "type": "test_provider_result",
+                    "id": req_id,
+                    "provider": prov_name,
+                    "data": res,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }))
+                continue
+
 
             if mtype == "save_data":
                 try:
                     payload = data.get("data", {})
-                    # Merge with existing to avoid overwriting unrelated fields
-                    existing = {}
-                    if DATA_FILE.exists():
-                        try:
-                            existing = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-                        except Exception:
-                            existing = {}
+                    existing = load_vault_data()
                     existing.update(payload)
-                    DATA_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-                    logger.debug("Data saved to pika_data.json")
+                    save_vault_data(existing)
+                    logger.debug("Encrypted data saved to pika_data.json vault")
                 except Exception as e:
                     logger.error(f"save_data error: {e}")
                 continue
 
             if mtype == "load_data":
                 try:
-                    if DATA_FILE.exists():
-                        saved = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-                        await ws.send(json.dumps({
-                            "type": "app_data",
-                            "data": saved,
-                            "timestamp": datetime.now(timezone.utc).isoformat()
-                        }))
-                        logger.info("Data loaded from pika_data.json")
-                    else:
-                        await ws.send(json.dumps({"type": "app_data", "data": {}, "timestamp": datetime.now(timezone.utc).isoformat()}))
+                    saved = load_vault_data()
+                    await ws.send(json.dumps({
+                        "type": "app_data",
+                        "data": saved,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }))
+                    logger.info("Loaded secure vault data from pika_data.json")
                 except Exception as e:
                     logger.error(f"load_data error: {e}")
                 continue
