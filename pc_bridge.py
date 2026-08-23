@@ -30,10 +30,11 @@ import asyncio
 import base64
 import json
 try:
-    from agent_mini.core import AgentLoop, Memory, ToolEvent, create_provider
+    from agent_mini.agent import AgentLoop, Memory, ToolEvent
+    from agent_mini.providers import create_provider
     from pathlib import Path
     HAS_AGENT_MINI = True
-except ImportError:
+except Exception:
     HAS_AGENT_MINI = False
 
 import logging
@@ -1248,12 +1249,12 @@ async def handle_agent_action(ws, msg):
                         "data": {"tool": event.name, "error": event.is_error},
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }))
-            agent.on_tool_event = _on_tool_event
 
-            resp = await agent.run_async(text)
+            history_list = params.get("history", [])
+            resp_text = await agent.run(text, conversation=history_list, on_tool_event=_on_tool_event)
             await ws.send(json.dumps({
                 "type": "llm_stream", 
-                "chunk": resp.output, 
+                "chunk": resp_text, 
                 "provider": provider_name,
                 "id": conv_id, 
                 "done": True,

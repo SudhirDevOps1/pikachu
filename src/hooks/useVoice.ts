@@ -111,47 +111,58 @@ export function useVoice(onFinal: (text: string) => void, sendRaw?: (msg: any) =
               if (e.results[i].isFinal) final += t;
               else interim += t;
             }
-            setPartial(interim || final);
+            if (interim || final) {
+              setPartial(interim || final);
+            }
             if (final) {
               onFinal(final.trim()); // Process the command/query
               setPartial(""); // Clear partial after final
-              // DON'T stop — keep listening for next command
             }
           };
           rec.onerror = (e: any) => {
-            // Auto-restart on recoverable errors
-            if (e.error === "no-speech" || e.error === "audio-capture") {
-              if (useStore.getState().isListening) {
-                try { rec.start(); } catch {}
-              }
-            }
+            console.warn("Speech recognition notice:", e.error);
           };
           rec.onend = () => {
-            // Auto-restart to keep continuous listening
+            // Safe auto-restart for continuous listening
             if (useStore.getState().isListening) {
-              try { recognitionRef.current?.start(); } catch {}
+              window.setTimeout(() => {
+                if (useStore.getState().isListening && recognitionRef.current) {
+                  try { recognitionRef.current.start(); } catch {}
+                }
+              }, 200);
             }
           };
           recognitionRef.current = rec;
-          rec.start();
+          try {
+            rec.start();
+          } catch (err) {
+            console.warn("Failed to start speech recognition:", err);
+          }
+        } else {
+          // If browser has no Web Speech API, fallback to backend Vosk
+          if (useStore.getState().isConnected && sendRaw) {
+            sendRaw(JSON.stringify({ type: "voice_start", engine: "vosk" }));
+          }
         }
       }
     } catch {
       useStore.getState().addToast({ type: "error", message: "माइक्रोफोन एक्सेस नहीं मिला" });
       setListening(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runWaveform, setListening, setPartial, onFinal, sendRaw]);
 
   const stopListening = useCallback(() => {
     setListening(false);
     setPartial("");
     stopWaveform();
+    if (useStore.getState().isConnected && sendRaw) {
+      sendRaw(JSON.stringify({ type: "voice_stop" }));
+    }
     try {
       recognitionRef.current?.stop();
     } catch {}
     recognitionRef.current = null;
-  }, [setListening, setPartial, stopWaveform]);
+  }, [setListening, setPartial, stopWaveform, sendRaw]);
 
   const toggle = useCallback(() => {
     if (useStore.getState().isListening) stopListening();

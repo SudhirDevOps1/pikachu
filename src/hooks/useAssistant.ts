@@ -294,7 +294,10 @@ export function useAssistant() {
             const audio = new Audio(`data:${mime};base64,${d.audio}`);
             store.getState().setSpeaking(true);
             audio.onended = () => store.getState().setSpeaking(false);
-            audio.play().catch(() => store.getState().setSpeaking(false));
+            audio.play().catch((err) => {
+              console.warn("Audio play rejected:", err);
+              store.getState().setSpeaking(false);
+            });
           } catch {
             store.getState().setSpeaking(false);
           }
@@ -309,15 +312,15 @@ export function useAssistant() {
         }
       }
     } else if (msg.type === "llm_stream") {
-      if (!streamId.current) return;
-      if (!store.getState().messages.find((m) => m.id === streamId.current)) {
-        store.getState().addMessage({ id: streamId.current, role: "assistant", content: "", provider: msg.provider, isStreaming: true });
+      const curId = streamId.current || msg.id;
+      if (!curId) return;
+      if (!store.getState().messages.find((m) => m.id === curId)) {
+        store.getState().addMessage({ id: curId, role: "assistant", content: "", provider: msg.provider, isStreaming: true });
         store.getState().setAiThinking(false);
       }
       if (msg.done) {
-        // If the final packet also carries content (e.g. agent-mini one-shot reply), append it first
         if (msg.chunk) {
-          store.getState().appendToMessage(streamId.current, msg.chunk);
+          store.getState().appendToMessage(curId, msg.chunk);
         }
         if (msg.usage) {
           store.getState().addTokenUsage(msg.provider, {
@@ -326,14 +329,17 @@ export function useAssistant() {
             total: msg.usage.total_tokens,
           });
         }
-        store.getState().finalizeMessage(streamId.current);
-        const msgObj = store.getState().messages.find((m) => m.id === streamId.current);
-        if (msgObj?.content) {
-          triggerTTS(msgObj.content);
+        store.getState().finalizeMessage(curId);
+        store.getState().setAiThinking(false);
+        const msgObj = store.getState().messages.find((m) => m.id === curId);
+        const textToSpeak = (msgObj?.content || "") + (msg.chunk || "");
+        if (textToSpeak.trim()) {
+          const cleanText = textToSpeak.replace(/[*#`_~]/g, "").replace(/\n+/g, " ").trim();
+          triggerTTS(cleanText);
         }
         streamId.current = null;
       } else {
-        store.getState().appendToMessage(streamId.current, msg.chunk);
+        store.getState().appendToMessage(curId, msg.chunk);
       }
 
     } else if ((msg as any).type === "app_data") {
