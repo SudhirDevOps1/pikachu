@@ -231,18 +231,60 @@ export function SettingsPanel() {
       {/* Custom Providers */}
       <CustomProvidersSection />
 
-      {/* AI Personality */}
-      <Section icon={User} title="AI व्यक्तित्व (System Prompt)">
-        <div className="space-y-2">
-          <p className="text-xs text-white/50">
-            पिका को बताएँ कि उसे कैसे व्यवहार करना है (जैसे: "तुम एक कोडिंग एक्सपर्ट हो")
-          </p>
-          <textarea
-            value={settings.systemPrompt}
-            onChange={(e) => updateSettings({ systemPrompt: e.target.value })}
-            placeholder="You are Pika, a helpful AI assistant..."
-            className="w-full resize-y rounded-xl bg-white/5 p-3 text-sm text-white placeholder-white/30 outline-none focus:bg-white/10 min-h-[80px]"
-          />
+      {/* AI Personality & Language */}
+      <Section icon={User} title="AI व्यक्तित्व और भाषा शैली (Language & Persona)">
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <span className="text-sm font-medium text-white">बातचीत की भाषा शैली (Response Language)</span>
+              <p className="text-[11px] text-white/40">पिका किस भाषा में आपसे बात करेगा</p>
+            </div>
+            <select
+              value={settings.chatLanguageStyle || "auto"}
+              onChange={(e) => updateSettings({ chatLanguageStyle: e.target.value as any })}
+              className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-cyan-300 font-medium outline-none"
+            >
+              <option value="auto" className="bg-navy-800 text-white">🔄 ऑटो-डिटेक्ट (जैसा आप बोलेंगे वैसा जवाब)</option>
+              <option value="hinglish" className="bg-navy-800 text-white">🔤 Hinglish (रोमन हिंदी + इंग्लिश मिक्स)</option>
+              <option value="hindi" className="bg-navy-800 text-white">🇮🇳 हिंदी (शुद्ध देवनागरी हिंदी)</option>
+              <option value="english" className="bg-navy-800 text-white">🇬🇧 English (Pure English)</option>
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              <span className="text-xs text-white/50">कस्टम निर्देश (System Prompt)</span>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ systemPrompt: "You are Pika, a smart, witty and helpful friend. Talk in friendly Hinglish." })}
+                  className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  हिंग्लिश
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ systemPrompt: "आप पिका हैं, एक अत्यंत बुद्धिमान और विनम्र निजी AI सहायक। हमेशा शुद्ध हिंदी में उत्तर दें।" })}
+                  className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  हिंदी
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateSettings({ systemPrompt: "You are Pika, an advanced autonomous desktop AI engineer. Always reply in clear, professional English." })}
+                  className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  English
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={settings.systemPrompt}
+              onChange={(e) => updateSettings({ systemPrompt: e.target.value })}
+              placeholder="You are Pika, a helpful AI assistant..."
+              className="w-full resize-y rounded-xl bg-white/5 p-3 text-sm text-white placeholder-white/30 outline-none focus:bg-white/10 min-h-[80px]"
+            />
+          </div>
         </div>
       </Section>
 

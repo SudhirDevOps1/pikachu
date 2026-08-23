@@ -99,6 +99,7 @@ export interface AppSettings {
   providerModels: Record<string, string>;
   apiKeys: Record<string, string>;
   systemPrompt: string;
+  chatLanguageStyle?: "auto" | "hinglish" | "hindi" | "english";
   voiceSettings: {
     language: string;
     speed: number;

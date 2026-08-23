@@ -1539,21 +1539,21 @@ def _test_provider_http(provider: str, base_url: str = "", api_key: str = "", mo
     lat = round((time.perf_counter() - start_t) * 1000)
     return {"status": "error", "latencyMs": lat, "error": last_err or "Connection failed"}
 SYSTEM_PROMPT = (
-    "You are Pika (पिका), a smart, witty and friendly personal AI assistant running directly on the user's Windows PC. "
-    "LANGUAGE: Speak in natural Hinglish (Hindi + English mix) by default — use Devanagari for Hindi words. "
-    "Match the user's language style exactly: if they write Hindi, reply in Hindi; if English, in English; if Hinglish, in Hinglish. "
-    "PERSONALITY: Be warm and conversational like a knowledgeable friend — not a robot. Use humor when appropriate. "
-    "BREVITY: Keep replies short and punchy unless detail is needed. 1-2 emojis max per reply. "
-    "GOOD EXAMPLES: 'Chrome khol diya! 🚀', 'Battery 45% hai bhai, thoda charge kar lo', 'Haan haan, batao!', 'Done! Kuch aur chahiye?'. "
-    "CAPABILITIES: You have full control over the user's Windows PC — apps, volume, brightness, files, reminders, web search, system info, processes, clipboard, keyboard shortcuts, and Obsidian notes. "
-    "When a command is executed, confirm briefly in the same language. "
-    "NEVER sound corporate or robotic. Always feel like a helpful friend."
+    "You are Pika (पिका), a brilliant, super-smart, empathetic and friendly personal AI assistant living directly on the user's Windows PC.\n"
+    "🎯 CORE MULTI-LINGUAL & ADAPTABILITY RULES:\n"
+    "1. DYNAMIC LANGUAGE ADAPTATION:\n"
+    "   • If user speaks/writes in HINGLISH (e.g. 'kya haal hai bhai', 'chrome khol do yaar', 'ek mast idea batao') → Reply in ultra-natural, conversational Hinglish (e.g. 'Badhiya bhai! Chrome khol diya 🚀', 'Haan bilkul! Yeh dekho...').\n"
+    "   • If user speaks/writes in HINDI (e.g. 'नमस्ते पिका, आज का समाचार क्या है?') → Reply in pure, fluent Hindi in Devanagari script (e.g. 'नमस्ते! आज के मुख्य समाचार इस प्रकार हैं... 📰').\n"
+    "   • If user speaks/writes in ENGLISH (e.g. 'How does a transformer neural network work?') → Reply in clean, fluent and structured English.\n"
+    "2. PERSONALITY & TONE: Warm, witty, proactive like a tech-savvy best friend. Never sound robotic, boring or overly formal.\n"
+    "3. BREVITY & QUALITY: Keep chat answers crisp (1-2 emojis max). For coding, deep research, or tutorials, provide clear step-by-step markdown.\n"
+    "4. PC AUTOMATION: You control the user's PC (apps, volume, brightness, screenshots, system telemetry, Obsidian notes, files, web search). Confirm actions with cheerful confidence."
 )
 HISTORY: list = []
 CURRENT_PROVIDER = next((p for p in LLM_ORDER if os.getenv(LLM_PROVIDERS[p][2])), "groq")
 
 
-async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=None, preferred_provider=None, custom_providers=None):
+async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=None, preferred_provider=None, custom_providers=None, chat_language_style="auto"):
     """Yield (chunk, provider, done) with dynamic custom provider and fallback support."""
     keys_map = keys_map or {}
     models_map = models_map or {}
@@ -1561,6 +1561,16 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
     global HISTORY
     HISTORY.append({"role": "user", "content": text})
     HISTORY = HISTORY[-20:]
+
+    lang_instruction = ""
+    if chat_language_style == "hindi":
+        lang_instruction = "\n\n[STRICT LANGUAGE RULE]: Always reply strictly in pure Hindi (Devanagari script)."
+    elif chat_language_style == "hinglish":
+        lang_instruction = "\n\n[STRICT LANGUAGE RULE]: Always reply strictly in conversational Hinglish (Hindi words in English/Roman script)."
+    elif chat_language_style == "english":
+        lang_instruction = "\n\n[STRICT LANGUAGE RULE]: Always reply strictly in pure English."
+    else:
+        lang_instruction = "\n\n[LANGUAGE RULE]: Mirror the user's language style dynamically (Hinglish -> Hinglish, Hindi -> Hindi, English -> English)."
 
     # Check if preferred_provider is a custom provider
     matching_custom = next((c for c in custom_providers if c.get("id") == preferred_provider or c.get("name", "").lower() == str(preferred_provider).lower()), None)
@@ -1585,7 +1595,7 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
         except Exception:
             pass
             
-        sys_prompt = (system_prompt or SYSTEM_PROMPT) + mem_text
+        sys_prompt = (system_prompt or SYSTEM_PROMPT) + lang_instruction + mem_text
         payload = {"model": model, "stream": True, "temperature": 0.7, "max_tokens": 2048,
                    "messages": [{"role": "system", "content": sys_prompt}] + HISTORY}
         loop = asyncio.get_event_loop()
@@ -1677,7 +1687,7 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
         except Exception:
             pass
             
-        sys_prompt = (system_prompt or SYSTEM_PROMPT) + mem_text
+        sys_prompt = (system_prompt or SYSTEM_PROMPT) + lang_instruction + mem_text
         payload = {"model": model, "stream": True, "temperature": 0.7, "max_tokens": 2048,
                    "messages": [{"role": "system", "content": sys_prompt}] + HISTORY}
         loop = asyncio.get_event_loop()
@@ -1835,7 +1845,10 @@ async def handle_query(ws, msg):
     prompt_tokens = max(1, len(text) // 4 + 40)
     completion_tokens = 0
     
-    async for chunk, provider, done in llm_stream(text, keys_map=keys_map, models_map=models_map, preferred_provider=provider_name, custom_providers=custom_providers):
+    sys_prompt_param = params.get("system_prompt")
+    lang_style = params.get("chatLanguageStyle", "auto")
+    
+    async for chunk, provider, done in llm_stream(text, keys_map=keys_map, models_map=models_map, system_prompt=sys_prompt_param, preferred_provider=provider_name, custom_providers=custom_providers, chat_language_style=lang_style):
         if chunk:
             completion_tokens += max(1, len(chunk) // 4)
         usage_payload = None

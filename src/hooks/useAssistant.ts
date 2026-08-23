@@ -204,6 +204,7 @@ export function useAssistant() {
           provider_models: store.getState().settings.providerModels || {},
           custom_providers: store.getState().settings.customProviders || [],
           system_prompt: systemPrompt, 
+          chatLanguageStyle: store.getState().settings.chatLanguageStyle || "auto",
           history,
           obsidianEnabled: store.getState().settings.obsidianEnabled,
           obsidianUrl: store.getState().settings.obsidianUrl,

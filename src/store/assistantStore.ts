@@ -29,6 +29,7 @@ const defaultSettings: AppSettings = {
   },
   apiKeys: {},
   systemPrompt: "You are Pika, a friendly personal AI assistant on the user's PC. Default language Hindi (Devanagari). Match the user's language. Keep replies short.",
+  chatLanguageStyle: "auto",
   voiceSettings: { language: "hi-IN", speed: 1, pitch: 0 },
   bridgeUrl: "ws://localhost:8765",
   wakeWordEnabled: false,
