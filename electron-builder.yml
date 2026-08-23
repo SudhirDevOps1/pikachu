@@ -1,0 +1,63 @@
+# ============================================================================
+#  PIKA AI — electron-builder configuration
+#  Yeh file batati hai ki app ko .exe / .dmg / .AppImage mein kaise pack karna hai
+#  Build command:  npx electron-builder --win --x64
+# ============================================================================
+
+appId: com.pika.ai.assistant
+productName: Pika AI
+copyright: Copyright © 2026 Pika AI
+
+directories:
+  output: release
+  buildResources: build
+
+# Kaun si files final app ke andar jayengi
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+
+# Python bridge + models ko app ke saath ship karo (asar ke bahar)
+extraResources:
+  - from: pc_bridge.py
+    to: pc_bridge.py
+  - from: requirements.txt
+    to: requirements.txt
+
+asar: true
+compression: maximum
+
+# ─── Windows ────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: "Pika-AI-Setup-${version}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Pika AI
+  deleteAppDataOnUninstall: false
+
+# ─── macOS ──────────────────────────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.productivity
+  artifactName: "Pika-AI-${version}-${arch}.${ext}"
+
+# ─── Linux ──────────────────────────────────────────────────────────────────
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+  artifactName: "Pika-AI-${version}.${ext}"

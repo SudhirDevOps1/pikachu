@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ PIKA AI — Personal Desktop Controller</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;600;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0b10;
+            --card: #13151f;
+            --primary: #00f0ff;
+            --secondary: #ff0055;
+            --accent: #7c3aed;
+            --text: #e2e8f0;
+            --text-dim: #64748b;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+        }
+
+        /* --- ANIMATED BACKGROUND --- */
+        #bg-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: -1;
+            opacity: 0.4;
+        }
+
+        /* --- LAYOUT --- */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 900;
+            font-size: 1.5rem;
+            letter-spacing: -1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo span { color: var(--primary); }
+        
+        .nav-links { display: flex; gap: 20px; }
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: 0.3s;
+        }
+        .nav-links a:hover { color: var(--primary); }
+
+        /* --- HERO SECTION --- */
+        .hero {
+            min-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.5rem, 8vw, 5rem);
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            background: linear-gradient(to right, #fff, var(--primary));
+            -webkit-background-clip: text;
+            color: transparent;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            max-width: 600px;
+            margin-bottom: 40px;
+        }
+
+        /* --- NEURAL ORB ANIMATION --- */
+        .orb-container {
+            width: 200px;
+            height: 200px;
+            position: relative;
+            margin: 40px auto;
+        }
+
+        .orb {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, var(--primary), transparent);
+            box-shadow: 0 0 60px var(--primary), inset 0 0 40px var(--accent);
+            animation: pulse 3s infinite ease-in-out;
+        }
+
+        .orb::before {
+            content: '';
+            position: absolute;
+            top: -10px; left: -10px; right: -10px; bottom: -10px;
+            border: 2px dashed var(--secondary);
+            border-radius: 50%;
+            animation: spin 10s linear infinite;
+        }
+
+        .orb::after {
+            content: '';
+            position: absolute;
+            top: -25px; left: -25px; right: -25px; bottom: -25px;
+            border: 1px solid var(--accent);
+            border-radius: 50%;
+            animation: spin 15s linear infinite reverse;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 60px var(--primary); }
+            50% { transform: scale(1.05); box-shadow: 0 0 100px var(--primary); }
+        }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* --- BUTTONS --- */
+        .btn-group { display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; }
+        
+        .btn {
+            padding: 15px 30px;
+            border-radius: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: 0.3s;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #000;
+            box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+        }
+        .btn-primary:hover { transform: translateY(-3px); box-shadow: 0 0 40px rgba(0, 240, 255, 0.6); }
+
+        .btn-outline {
+            border: 1px solid var(--text-dim);
+            color: var(--text);
+            background: transparent;
+        }
+        .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+
+        /* --- FEATURES GRID --- */
+        .features {
+            padding: 100px 0;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 60px;
+        }
+        .section-title span { color: var(--primary); }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+
+        .card {
+            background: var(--card);
+            padding: 30px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: 0.3s;
+        }
+        .card:hover {
+            border-color: var(--primary);
+            transform: translateY(-5px);
+        }
+
+        .icon {
+            font-size: 2rem;
+            margin-bottom: 20px;
+            display: inline-block;
+        }
+
+        .card h3 { margin-bottom: 10px; font-size: 1.2rem; }
+        .card p { color: var(--text-dim); line-height: 1.6; font-size: 0.95rem; }
+
+        .tag {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            margin-top: 15px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .tag-vosk { background: rgba(0, 240, 255, 0.1); color: var(--primary); }
+        .tag-tts { background: rgba(124, 58, 237, 0.1); color: var(--accent); }
+
+        /* --- MOBILE ACCESS SECTION --- */
+        .mobile-access {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.05), rgba(124, 58, 237, 0.05));
+            padding: 60px;
+            border-radius: 30px;
+            text-align: center;
+            margin: 50px 0;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .code-block {
+            background: #000;
+            padding: 15px;
+            border-radius: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--secondary);
+            margin: 20px auto;
+            max-width: 400px;
+            border-left: 3px solid var(--primary);
+        }
+
+        /* --- FOOTER --- */
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.5rem; }
+            .nav-links { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Background Particles -->
+    <canvas id="bg-canvas"></canvas>
+
+    <div class="container">
+        <nav>
+            <div class="logo">⚡ PIKA <span>AI</span></div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#mobile">Mobile Access</a>
+                <a href="#demo">Demo</a>
+                <a href="https://github.com/sudhirdevops1" target="_blank">GitHub</a>
+            </div>
+        </nav>
+
+        <section class="hero">
+            <div class="orb-container">
+                <div class="orb"></div>
+            </div>
+            <h1>अपना कंप्यूटर बोल कर चलाओ<br><span style="font-size: 0.6em; color: var(--primary)">Control Your PC with Voice</span></h1>
+            <p>Powered by <b>Vosk</b> (Hindi+English STT, 100% offline) & <b>Microsoft Edge TTS</b>.<br>
+               Wake word: <b style="color:var(--primary)">"Hey Assistant"</b> · Hinglish accent detection · Full desktop automation.</p>
+
+            <div class="btn-group">
+                <a href="#demo" class="btn btn-primary">⚡ Open Live Demo</a>
+                <a href="https://github.com/sudhirdevops1/Ai-assistant-pika" class="btn btn-outline">📂 View Code</a>
+            </div>
+
+            <!-- Stats bar -->
+            <div style="display:flex; gap:40px; margin-top:50px; flex-wrap:wrap; justify-content:center;">
+                <div style="text-align:center;">
+                    <div style="font-size:2rem; font-weight:900; color:var(--primary);" class="stat" data-target="120">0</div>
+                    <div style="font-size:0.8rem; color:var(--text-dim);">Voice Commands</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:2rem; font-weight:900; color:var(--accent);" class="stat" data-target="7">0</div>
+                    <div style="font-size:0.8rem; color:var(--text-dim);">Free AI Providers</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:2rem; font-weight:900; color:var(--secondary);" class="stat" data-target="100">0</div>
+                    <div style="font-size:0.8rem; color:var(--text-dim);">% Offline STT</div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-size:2rem; font-weight:900; color:#22c55e;" class="stat" data-target="30">0</div>
+                    <div style="font-size:0.8rem; color:var(--text-dim);">PC Automations</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- LIVE TERMINAL DEMO -->
+        <section style="padding: 40px 0 20px;">
+            <div style="max-width:700px; margin:0 auto; background:#0d0f16; border:1px solid rgba(255,255,255,0.08); border-radius:16px; overflow:hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.5);">
+                <div style="display:flex; gap:8px; padding:12px 16px; background:rgba(255,255,255,0.03); border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></span>
+                    <span style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></span>
+                    <span style="width:12px;height:12px;border-radius:50%;background:#28c840;"></span>
+                    <span style="margin-left:10px; font-family:'JetBrains Mono',monospace; font-size:0.75rem; color:var(--text-dim);">pika@bridge — ws://localhost:8765</span>
+                </div>
+                <div id="terminal" style="padding:20px; font-family:'JetBrains Mono',monospace; font-size:0.85rem; line-height:1.9; min-height:220px; color:#a5f3fc;"></div>
+            </div>
+        </section>
+
+        <section id="features" class="features">
+            <h2 class="section-title">Advanced <span>Features</span></h2>
+            <div class="grid">
+                <div class="card">
+                    <div class="icon">🎙️</div>
+                    <h3>Voice Recognition (Vosk)</h3>
+                    <p>Accurate Hindi & English speech-to-text powered by Vosk. Works completely offline without internet. Detects Hinglish accents perfectly.</p>
+                    <span class="tag tag-vosk">OFFLINE · ACCURATE</span>
+                </div>
+                
+                <div class="card">
+                    <div class="icon">️</div>
+                    <h3>Natural Text-to-Speech</h3>
+                    <p>Crystal clear voice responses using Microsoft Edge TTS (SwaraNeural). Pika speaks to you in Hindi, not just text.</p>
+                    <span class="tag tag-tts">NEURAL VOICE</span>
+                </div>
+
+                <div class="card">
+                    <div class="icon">🖥️</div>
+                    <h3>Full PC Automation</h3>
+                    <p>Shutdown, restart, open apps, control volume, take screenshots, and manage processes—all via voice commands.</p>
+                    <span class="tag tag-vosk">30+ COMMANDS</span>
+                </div>
+
+                <div class="card">
+                    <div class="icon">📱</div>
+                    <h3>Mobile Access (WiFi)</h3>
+                    <p>Control your PC from your phone! Just type your PC's IP address in the browser while on the same WiFi network.</p>
+                    <span class="tag tag-tts">REMOTE CONTROL</span>
+                </div>
+            </div>
+        </section>
+
+        <section id="mobile" class="mobile-access">
+            <h2>📱 Access from Phone</h2>
+            <p style="color: var(--text-dim); margin-top: 10px;">
+                Same WiFi pe hona chahiye! Phone browser mein type karein:
+            </p>
+            <div class="code-block">
+                http://YOUR_PC_IP:3000
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-dim);">
+                <i>Check your IP using <b>ipconfig</b> (Windows) or <b>ifconfig</b> (Mac/Linux)</i>
+            </p>
+        </section>
+
+        <section id="demo" style="text-align: center; padding-bottom: 80px;">
+            <h2 class="section-title">Try the <span>Demo</span></h2>
+            <p style="color: var(--text-dim); margin-bottom: 20px;">
+                Experience the futuristic interface. (Note: Backend features require local Python bridge)
+            </p>
+            <!-- This link points to your running Vite app. 
+                 For GitHub Pages, replace this with the path to your Vite build or a demo link -->
+            <a href="/app.html" class="btn btn-primary">Enter Dashboard</a>
+        </section>
+
+        <footer>
+            <p>⚡ PIKA AI Assistant — Built with ❤️ and ⚡</p>
+            <p style="margin-top: 5px; font-size: 0.8rem;">© 2026 Sudhir DevOps. Open Source.</p>
+        </footer>
+    </div>
+
+    <script>
+        // Particle Animation Script
+        const canvas = document.getElementById('bg-canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        let particles = [];
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+
+        class Particle {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 0.5;
+                this.vy = (Math.random() - 0.5) * 0.5;
+                this.size = Math.random() * 2;
+                this.color = Math.random() > 0.5 ? '#00f0ff' : '#7c3aed';
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                if (this.x < 0) this.x = width;
+                if (this.x > width) this.x = 0;
+                if (this.y < 0) this.y = height;
+                if (this.y > height) this.y = 0;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        function init() {
+            resize();
+            for (let i = 0; i < 80; i++) {
+                particles.push(new Particle());
+            }
+            animate();
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            
+            particles.forEach((p, i) => {
+                p.update();
+                p.draw();
+
+                // Draw connections
+                for (let j = i + 1; j < particles.length; j++) {
+                    const p2 = particles[j];
+                    const dx = p.x - p2.x;
+                    const dy = p.y - p2.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < 120) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = `rgba(0, 240, 255, ${1 - dist / 120})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.moveTo(p.x, p.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.stroke();
+                    }
+                }
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener('resize', resize);
+        init();
+
+        // ─── Animated stat counters ───
+        document.querySelectorAll('.stat').forEach(el => {
+            const target = +el.dataset.target;
+            let cur = 0;
+            const step = Math.max(1, Math.ceil(target / 60));
+            const t = setInterval(() => {
+                cur = Math.min(target, cur + step);
+                el.textContent = (target === 7 || target === 100) ? cur : cur + '+';
+                if (cur >= target) clearInterval(t);
+            }, 30);
+        });
+
+        // ─── Live terminal typing demo ───
+        const LINES = [
+            { text: '$ python pc_bridge.py', color: '#e2e8f0', delay: 400 },
+            { text: '✓ Vosk Hindi model loaded (offline STT ready)', color: '#28c840', delay: 700 },
+            { text: '✓ Edge TTS ready — voice: hi-IN-SwaraNeural', color: '#28c840', delay: 500 },
+            { text: '✓ Server running on ws://localhost:8765', color: '#28c840', delay: 600 },
+            { text: '🎙️  [WAKE WORD] "Hey Assistant" detected...', color: '#00f0ff', delay: 900 },
+            { text: '🗣️  User: "chrome kholo aur volume 50% karo"', color: '#febc2e', delay: 800 },
+            { text: '⚡ EXEC apps/open → chrome.exe launched', color: '#a78bfa', delay: 500 },
+            { text: '⚡ EXEC volume/set → 50%', color: '#a78bfa', delay: 500 },
+            { text: '🔊 TTS: "Ho gaya! Chrome khul gaya, volume 50% par set."', color: '#f0abfc', delay: 1200 },
+        ];
+
+        const termEl = document.getElementById('terminal');
+        let lineIdx = 0;
+
+        function typeLine() {
+            if (lineIdx >= LINES.length) {
+                setTimeout(() => { termEl.innerHTML = ''; lineIdx = 0; typeLine(); }, 4000);
+                return;
+            }
+            const line = LINES[lineIdx];
+            const div = document.createElement('div');
+            div.style.color = line.color;
+            termEl.appendChild(div);
+            let ch = 0;
+            const typer = setInterval(() => {
+                div.textContent = line.text.slice(0, ++ch) + (ch < line.text.length ? '▌' : '');
+                if (ch >= line.text.length) {
+                    clearInterval(typer);
+                    lineIdx++;
+                    setTimeout(typeLine, line.delay);
+                }
+            }, 18);
+        }
+        typeLine();
+    </script>
+</body>
+</html>

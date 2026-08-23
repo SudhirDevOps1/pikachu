@@ -1,0 +1,1238 @@
+================================================================================
+ PIKA AI v5.0 — OPTION B: PURE ELECTRON + NODE.JS (NO PYTHON AT ALL)
+ 2026 Analysis: When, Why, How. Single-process, smallest install.
+ Paste this ENTIRE file to: Claude 3.5 Sonnet / GPT-4o / Gemini 2.0 Flash
+================================================================================
+
+ROLE
+You are a senior Electron + Node.js native module architect.
+Your task is to eliminate Python ENTIRELY from Pika AI and implement every
+backend service in Node.js inside the Electron main process.
+
+The result is a single Electron app with NO Python dependency, no PyInstaller,
+no pika-bridge.exe — just one Electron installer.
+
+--------------------------------------------------------------------------------
+CRITICAL SAFETY RULE — READ FIRST
+--------------------------------------------------------------------------------
+Migrate ONE service at a time behind feature flags. Keep `npm run build` passing
+at every step. Never remove a working feature. Python code stays in the repo for
+reference but nothing calls it in production.
+
+--------------------------------------------------------------------------------
+2026 ANALYSIS: PURE NODE.JS — HONEST TRADEOFFS
+--------------------------------------------------------------------------------
+
+WHY CHOOSE THIS PATH:
+  + Single process, no spawn overhead (cold start <1s vs ~2s sidecar)
+  + Smallest bundle possible — no PyInstaller exe inside Electron
+  + No Python PATH issues, no PyInstaller antivirus flags
+  + Simpler CI/CD — no Python in the build pipeline
+  + One language for the whole team (JS/TS developers)
+  + Tauri-compatible thinking (easier migration to Tauri later if needed)
+  + node-gyp native modules compile faster than PyInstaller freezing
+  + Web Speech API + whisper.js give zero-install voice recognition in 2026
+
+WHY THIS IS HARDER THAN IT SOUNDS:
+  + Vosk Node npm is NOT as mature as the Python version (fewer examples)
+  + @nut-tree/nut-js requires node-gyp + Visual C++ Build Tools on Windows
+  + Native modules must be rebuilt for each Electron version (electron-rebuild)
+  + keyboard/mouse macro recording is less reliable cross-platform in Node
+  + Background wake word detection is difficult when renderer is hidden/throttled
+  + OCR with tesseract.js (WASM) is 3-5x slower than pytesseract
+  + pyttsx3 offline TTS has no direct Node equivalent of equal quality
+
+2026 STATE OF KEY NODE.JS LIBRARIES:
+  Voice STT:
+    - vosk npm@0.3.45: works, but native addon packaging is painful
+    - whisper-node@1.x: wraps whisper.cpp, 75MB tiny-int8 model, best accuracy
+    - @xenova/transformers@2.x: Whisper ONNX in JS, works in renderer too
+    - Web Speech API: zero install, perfect for desktop Chrome/Electron renderer
+    RECOMMENDATION 2026: Web Speech API (renderer) for desktop voice,
+                          whisper-node for high-accuracy mode
+
+  TTS:
+    - say@0.16.x: uses macOS say / Windows SAPI / espeak — decent offline
+    - edge-tts npm port: exists but less maintained than Python version
+    - Microsoft Speech SDK for Node: works but complex setup
+    RECOMMENDATION 2026: say for offline, fetch edge-tts API for online
+
+  Desktop Automation:
+    - @nut-tree/nut-js@4.x: active, cross-platform, needs VC++ on Windows
+    - robotjs: STALE, avoid
+    - keysender@1.x: Windows-only, fast
+    - iohook: global key/mouse hooks, complex setup
+    RECOMMENDATION 2026: @nut-tree/nut-js for cross-platform, accept build complexity
+
+  System Info:
+    - systeminformation@5.x: excellent, pure JS, no native modules ✅
+    RECOMMENDATION 2026: use this, it is production-ready
+
+  Volume:
+    - loudness@2.x: cross-platform, no native compile ✅
+    RECOMMENDATION 2026: use this
+
+  Screenshot:
+    - screenshot-desktop@2.x: cross-platform, no native compile ✅
+    RECOMMENDATION 2026: use this
+
+  File ops: Node built-in fs/promises — already perfect ✅
+  Drive info: drivelist@9.x — no native compile ✅
+  Process list: ps-list@8.x — no native compile ✅
+  Clipboard: Electron built-in clipboard API ✅
+  DB: better-sqlite3@9.x — needs native compile, but well supported ✅
+  HTTP/LLM: Node 20 native fetch with streaming ✅
+  OCR: tesseract.js@5.x — WASM, no native, slower but portable ✅
+
+BOTTOM LINE:
+  If your team is JS-only and voice accuracy + macro recording are NOT critical
+  features, pure Node is achievable in 2026 with moderate effort.
+  If offline Hinglish accuracy and robust macros matter most, use Option A
+  (Python sidecar) and migrate to Node gradually over 6-12 months.
+
+--------------------------------------------------------------------------------
+TARGET ARCHITECTURE
+--------------------------------------------------------------------------------
+
+  Electron Renderer (React 19 + TypeScript)
+        |
+        |  contextBridge IPC  [contextIsolation:true, nodeIntegration:false]
+        v
+  Electron Main Process (Node.js 20 LTS)
+        |
+        +-- electron/services/systemService.cjs    (systeminformation)
+        +-- electron/services/powerService.cjs     (child_process shutdown/lock)
+        +-- electron/services/appService.cjs       (shell.openExternal + exec)
+        +-- electron/services/volumeService.cjs    (loudness)
+        +-- electron/services/clipboardService.cjs (electron clipboard)
+        +-- electron/services/screenService.cjs    (screenshot-desktop)
+        +-- electron/services/fileService.cjs      (fs/promises)
+        +-- electron/services/driveService.cjs     (drivelist)
+        +-- electron/services/processService.cjs   (ps-list + taskkill)
+        +-- electron/services/networkService.cjs   (os.networkInterfaces + fetch)
+        +-- electron/services/voiceService.cjs     (whisper-node OR Web Speech)
+        +-- electron/services/ttsService.cjs       (say + edge-tts fetch)
+        +-- electron/services/llmService.cjs       (native fetch streaming)
+        +-- electron/services/dbService.cjs        (better-sqlite3)
+        +-- electron/services/mobileServer.cjs     (express + ws, PIN auth)
+        +-- electron/services/commandRouter.cjs    (NLU routes to services)
+
+  All services are imported directly in electron/main.cjs.
+  ipcMain.handle("pika:command", (e, msg) => commandRouter.route(msg))
+
+  No WebSocket server on localhost:8765. No Python process. No spawn.
+
+--------------------------------------------------------------------------------
+STEP-BY-STEP IMPLEMENTATION
+--------------------------------------------------------------------------------
+
+=== STEP 1: Install dependencies ===
+
+npm install --save \
+  systeminformation \
+  loudness \
+  screenshot-desktop \
+  drivelist \
+  ps-list \
+  clipboardy \
+  better-sqlite3 \
+  express \
+  ws \
+  say \
+  mathjs
+
+npm install --save-dev \
+  @electron/rebuild
+
+npm install --save-optional \
+  @nut-tree/nut-js \
+  whisper-node
+
+Add to package.json:
+  "build": {
+    "nativeRebuilder": "after-pack",
+    "extraResources": [{ "from": "models/", "to": "models/" }]
+  }
+
+Add postinstall script for native module rebuild:
+  "postinstall": "electron-rebuild -f -w better-sqlite3"
+
+=== STEP 2: electron/services/systemService.cjs ===
+
+'use strict';
+const si = require("systeminformation");
+const os = require("os");
+
+async function getCpu() {
+  const load = await si.currentLoad();
+  const cpu  = await si.cpu();
+  return {
+    success: true,
+    message: `CPU ${Math.round(load.currentLoad)}%`,
+    data: {
+      percent: Math.round(load.currentLoad),
+      cores: os.cpus().length,
+      model: cpu.brand,
+      speed: cpu.speed,
+    },
+  };
+}
+
+async function getRam() {
+  const mem = await si.mem();
+  return {
+    success: true,
+    message: `RAM ${Math.round((mem.used / mem.total) * 100)}%`,
+    data: {
+      percent: Math.round((mem.used / mem.total) * 100),
+      used_gb: +(mem.used / 2**30).toFixed(1),
+      total_gb: +(mem.total / 2**30).toFixed(1),
+    },
+  };
+}
+
+async function getBattery() {
+  const b = await si.battery();
+  return {
+    success: true,
+    message: `बैटरी ${b.percent}%`,
+    data: { percent: b.percent, plugged: b.isCharging, hasBattery: b.hasBattery },
+  };
+}
+
+async function getDisk() {
+  const [fs] = await si.fsSize();
+  if (!fs) return { success: false, message: "डिस्क नहीं मिली", data: null };
+  return {
+    success: true,
+    message: `डिस्क ${Math.round((fs.used/fs.size)*100)}%`,
+    data: {
+      percent: Math.round((fs.used / fs.size) * 100),
+      free_gb: +((fs.size - fs.used) / 2**30).toFixed(1),
+      total_gb: +(fs.size / 2**30).toFixed(1),
+    },
+  };
+}
+
+async function getFullReport() {
+  const [cpu, ram, battery, disk] = await Promise.all([getCpu(), getRam(), getBattery(), getDisk()]);
+  const nets = require("os").networkInterfaces();
+  let ip = "127.0.0.1";
+  for (const iface of Object.values(nets)) {
+    for (const info of (iface || [])) {
+      if (info.family === "IPv4" && !info.internal) { ip = info.address; break; }
+    }
+  }
+  return {
+    success: true,
+    message: "सिस्टम रिपोर्ट",
+    data: { ...cpu.data, ...ram.data, ...battery.data, ...disk.data, ip, hostname: os.hostname() },
+  };
+}
+
+module.exports = { getCpu, getRam, getBattery, getDisk, getFullReport };
+
+=== STEP 3: electron/services/powerService.cjs ===
+
+'use strict';
+const { exec } = require("child_process");
+const { promisify } = require("util");
+const execAsync = promisify(exec);
+const IS_WIN = process.platform === "win32";
+const IS_MAC = process.platform === "darwin";
+
+const run = (cmd) => execAsync(cmd).catch((e) => ({ error: e.message }));
+
+module.exports = {
+  async shutdown(delay = 10) {
+    if (IS_WIN) await run(`shutdown /s /t ${delay}`);
+    else if (IS_MAC) await run(`osascript -e 'tell app "System Events" to shut down'`);
+    else await run("systemctl poweroff");
+    return { success: true, message: `${delay} सेकंड में बंद होगा।`, data: null };
+  },
+  async restart(delay = 10) {
+    if (IS_WIN) await run(`shutdown /r /t ${delay}`);
+    else if (IS_MAC) await run(`osascript -e 'tell app "System Events" to restart'`);
+    else await run("systemctl reboot");
+    return { success: true, message: "रीस्टार्ट हो रहा है।", data: null };
+  },
+  async sleep() {
+    if (IS_WIN) await run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0");
+    else if (IS_MAC) await run("pmset sleepnow");
+    else await run("systemctl suspend");
+    return { success: true, message: "स्लीप मोड।", data: null };
+  },
+  async lock() {
+    if (IS_WIN) await run("rundll32.exe user32.dll,LockWorkStation");
+    else if (IS_MAC) await run("pmset displaysleepnow");
+    else await run("loginctl lock-session");
+    return { success: true, message: "लॉक कर दिया।", data: null };
+  },
+  async hibernate() {
+    if (IS_WIN) await run("shutdown /h");
+    else await run("systemctl hibernate");
+    return { success: true, message: "हाइबरनेट।", data: null };
+  },
+  async logoff() {
+    if (IS_WIN) await run("shutdown /l");
+    return { success: true, message: "लॉग आउट।", data: null };
+  },
+};
+
+=== STEP 4: electron/services/fileService.cjs ===
+
+'use strict';
+const fs = require("fs/promises");
+const path = require("path");
+const os = require("os");
+
+const BLOCKED = [
+  /^[a-zA-Z]:\\Windows/i, /^[a-zA-Z]:\\Program Files/i,
+  /^\/System/i, /^\/usr/i, /^\/etc/i, /^\/bin/i, /^\/sbin/i
+];
+
+function resolvePath(p) {
+  if (!p) return path.join(os.homedir(), "Desktop");
+  const low = p.toLowerCase().trim();
+  const map = { desktop:"Desktop", documents:"Documents", downloads:"Downloads",
+                pictures:"Pictures", music:"Music", videos:"Videos" };
+  for (const [k, v] of Object.entries(map)) {
+    if (low === k || low.startsWith(k + "/") || low.startsWith(k + "\\")) {
+      const rest = p.slice(k.length).replace(/^[\\/]/, "");
+      return rest ? path.join(os.homedir(), v, rest) : path.join(os.homedir(), v);
+    }
+  }
+  const resolved = path.resolve(p);
+  return path.isAbsolute(p) ? resolved : path.join(os.homedir(), p);
+}
+
+function isSafe(p) {
+  return !BLOCKED.some((re) => re.test(p));
+}
+
+const ok  = (msg, data = null) => ({ success: true, message: msg, data });
+const err = (msg)              => ({ success: false, message: msg, data: null });
+
+module.exports = {
+  async createFile(p, content = "") {
+    const full = resolvePath(p);
+    if (!isSafe(full)) return err("सुरक्षा: पथ प्रतिबंधित है।");
+    await fs.mkdir(path.dirname(full), { recursive: true });
+    await fs.writeFile(full, content, "utf8");
+    return ok(`फाइल बनी: ${path.basename(full)}`);
+  },
+  async createFolder(p) {
+    const full = resolvePath(p);
+    if (!isSafe(full)) return err("सुरक्षा: पथ प्रतिबंधित है।");
+    await fs.mkdir(full, { recursive: true });
+    return ok(`फोल्डर बना: ${path.basename(full)}`);
+  },
+  async readFile(p) {
+    const full = resolvePath(p);
+    if (!isSafe(full)) return err("सुरक्षा: पथ प्रतिबंधित है।");
+    const content = await fs.readFile(full, "utf8");
+    return ok(`पढ़ा: ${path.basename(full)}`, { content: content.slice(0, 20000) });
+  },
+  async writeFile(p, content = "") {
+    const full = resolvePath(p);
+    if (!isSafe(full)) return err("सुरक्षा: पथ प्रतिबंधित है।");
+    await fs.writeFile(full, content, "utf8");
+    return ok(`सेव: ${path.basename(full)}`);
+  },
+  async deleteFile(p) {
+    const full = resolvePath(p);
+    if (!isSafe(full)) return err("सुरक्षा: पथ प्रतिबंधित है।");
+    try { await fs.rm(full, { recursive: true, force: true }); }
+    catch { return err("फाइल नहीं मिली या access denied।"); }
+    return ok(`डिलीट: ${path.basename(full)}`);
+  },
+  async renameFile(oldPath, newPath) {
+    const src = resolvePath(oldPath);
+    const dst = resolvePath(newPath);
+    if (!isSafe(src) || !isSafe(dst)) return err("सुरक्षा: पथ प्रतिबंधित है।");
+    await fs.rename(src, dst);
+    return ok(`रीनेम: ${path.basename(src)} → ${path.basename(dst)}`);
+  },
+  async listDirectory(p) {
+    const full = resolvePath(p);
+    const entries = await fs.readdir(full, { withFileTypes: true });
+    const items = entries.slice(0, 50).map(e => ({ name: e.name, is_dir: e.isDirectory() }));
+    return ok(`${items.length} आइटम`, { path: full, items });
+  },
+};
+
+=== STEP 5: electron/services/driveService.cjs ===
+
+'use strict';
+const drivelist = require("drivelist");
+const { promisify } = require("util");
+
+module.exports = {
+  async listDrives() {
+    const drives = await drivelist.list();
+    const result = drives
+      .filter(d => d.mountpoints.length > 0)
+      .map(d => ({
+        name: d.mountpoints[0].path,
+        description: d.description,
+        size: d.size || 0,
+        isReadOnly: d.isReadOnly,
+      }));
+
+    // Get usage via systeminformation
+    const si = require("systeminformation");
+    const fsData = await si.fsSize();
+    const enriched = result.map(d => {
+      const fs = fsData.find(f => f.mount === d.name || f.mount === d.name.replace("\\", ""));
+      return fs
+        ? { ...d, total: fs.size, free: fs.size - fs.used, used: fs.used,
+            percent: Math.round((fs.used / fs.size) * 100) }
+        : { ...d, total: d.size, free: 0, used: 0, percent: 0 };
+    });
+
+    return { success: true, message: `${enriched.length} ड्राइव मिले।`, data: { drives: enriched } };
+  },
+};
+
+=== STEP 6: electron/services/volumeService.cjs ===
+
+'use strict';
+const loudness = require("loudness");
+
+const ok  = (msg, data = null) => ({ success: true, message: msg, data });
+const err = (msg)              => ({ success: false, message: msg, data: null });
+
+module.exports = {
+  async volumeUp(amount = 10) {
+    const current = await loudness.getVolume();
+    await loudness.setVolume(Math.min(100, current + amount));
+    return ok(`आवाज़ बढ़ा दी।`);
+  },
+  async volumeDown(amount = 10) {
+    const current = await loudness.getVolume();
+    await loudness.setVolume(Math.max(0, current - amount));
+    return ok(`आवाज़ कम कर दी।`);
+  },
+  async volumeSet(percent) {
+    await loudness.setVolume(Math.max(0, Math.min(100, percent)));
+    return ok(`आवाज़ ${percent}% पर।`);
+  },
+  async mute() {
+    const muted = await loudness.getMuted();
+    await loudness.setMuted(!muted);
+    return ok(muted ? "अनम्यूट।" : "म्यूट।");
+  },
+  async getVolume() {
+    const v = await loudness.getVolume();
+    return ok(`आवाज़ ${v}%`, { percent: v });
+  },
+};
+
+=== STEP 7: electron/services/screenService.cjs ===
+
+'use strict';
+const screenshot = require("screenshot-desktop");
+const path = require("path");
+const os = require("os");
+const fs = require("fs/promises");
+
+module.exports = {
+  async takeScreenshot() {
+    const dir = path.join(os.homedir(), "Pictures", "Pika Screenshots");
+    await fs.mkdir(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const dest = path.join(dir, `screenshot-${ts}.png`);
+    const imgBuffer = await screenshot({ format: "png" });
+    await fs.writeFile(dest, imgBuffer);
+
+    // Thumbnail as data URI for UI
+    const b64 = imgBuffer.toString("base64");
+    return {
+      success: true,
+      message: `स्क्रीनशॉट सेव: ${path.basename(dest)}`,
+      data: { path: dest, thumbnail: `data:image/png;base64,${b64.slice(0, 50000)}` },
+    };
+  },
+};
+
+=== STEP 8: electron/services/processService.cjs ===
+
+'use strict';
+const psList = require("ps-list");
+const { exec } = require("child_process");
+const { promisify } = require("util");
+const execAsync = promisify(exec);
+const IS_WIN = process.platform === "win32";
+
+module.exports = {
+  async listProcesses() {
+    const procs = await psList();
+    const sorted = procs
+      .sort((a, b) => (b.memory || 0) - (a.memory || 0))
+      .slice(0, 30)
+      .map(p => ({ pid: p.pid, name: p.name, cpu: 0, ram: 0 }));
+    return { success: true, message: "प्रोसेस सूची", data: { items: sorted } };
+  },
+  async killProcess(nameOrPid) {
+    try {
+      if (IS_WIN) {
+        const flag = /^\d+$/.test(nameOrPid) ? `/PID ${nameOrPid}` : `/IM ${nameOrPid}.exe`;
+        await execAsync(`taskkill /F ${flag}`);
+      } else {
+        await execAsync(`pkill -f "${nameOrPid}"`);
+      }
+      return { success: true, message: `${nameOrPid} बंद कर दिया।`, data: null };
+    } catch {
+      return { success: false, message: "प्रोसेस नहीं मिला।", data: null };
+    }
+  },
+};
+
+=== STEP 9: electron/services/networkService.cjs ===
+
+'use strict';
+const os = require("os");
+
+function getLanIp() {
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const info of (iface || [])) {
+      if (info.family === "IPv4" && !info.internal) return info.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
+async function getPublicIp() {
+  try {
+    const r = await fetch("https://api.ipify.org", { signal: AbortSignal.timeout(5000) });
+    return await r.text();
+  } catch { return null; }
+}
+
+module.exports = {
+  async getNetworkInfo() {
+    const local = getLanIp();
+    const pub = await getPublicIp();
+    return {
+      success: true,
+      message: `IP: ${local}`,
+      data: { local, public: pub, hostname: os.hostname() },
+    };
+  },
+  getLanIp,
+};
+
+=== STEP 10: electron/services/llmService.cjs ===
+
+'use strict';
+
+const PROVIDERS = {
+  groq:       { url: "https://api.groq.com/openai/v1/chat/completions",    env: "GROQ_API_KEY",       model: "llama-3.3-70b-versatile" },
+  cerebras:   { url: "https://api.cerebras.ai/v1/chat/completions",        env: "CEREBRAS_API_KEY",   model: "llama-3.3-70b" },
+  mistral:    { url: "https://api.mistral.ai/v1/chat/completions",         env: "MISTRAL_API_KEY",    model: "mistral-small-latest" },
+  deepseek:   { url: "https://api.deepseek.com/chat/completions",          env: "DEEPSEEK_API_KEY",   model: "deepseek-chat" },
+  openrouter: { url: "https://openrouter.ai/api/v1/chat/completions",      env: "OPENROUTER_API_KEY", model: "meta-llama/llama-3.3-70b-instruct:free" },
+};
+
+const ORDER = ["groq", "cerebras", "mistral", "deepseek", "openrouter"];
+const SYSTEM = "You are Pika, a friendly personal AI assistant on the user's PC. Default language Hindi.";
+const history = [];
+let currentProvider = ORDER.find(p => process.env[PROVIDERS[p].env]) || "groq";
+
+module.exports = {
+  setProvider(name) { if (PROVIDERS[name]) { currentProvider = name; return true; } return false; },
+  getProvider() { return currentProvider; },
+  available() { return ORDER.filter(p => process.env[PROVIDERS[p].env]); },
+
+  async* stream(text) {
+    history.push({ role: "user", content: text });
+    if (history.length > 40) history.splice(0, history.length - 40);
+
+    const providers = [currentProvider, ...ORDER.filter(p => p !== currentProvider)].filter(p => process.env[PROVIDERS[p].env]);
+    if (!providers.length) {
+      yield { chunk: "Settings mein koi API key set nahi hai। Demo mode chal raha hai।", provider: "local_fallback", done: false };
+      yield { chunk: "", provider: "local_fallback", done: true };
+      return;
+    }
+
+    for (const provider of providers) {
+      const { url, env, model } = PROVIDERS[provider];
+      const messages = [{ role: "system", content: SYSTEM }, ...history.slice(-20)];
+      let full = "";
+      let failed = false;
+
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${process.env[env]}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, messages, stream: true, temperature: 0.7, max_tokens: 2048 }),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop();
+          for (const line of lines) {
+            const t = line.replace(/^data: /, "").trim();
+            if (!t || t === "[DONE]") continue;
+            try {
+              const delta = JSON.parse(t).choices[0].delta.content || "";
+              if (delta) { full += delta; yield { chunk: delta, provider, done: false }; }
+            } catch {}
+          }
+        }
+      } catch (e) {
+        console.error(`[llm] ${provider} failed:`, e.message);
+        failed = true;
+      }
+
+      if (!failed && full) {
+        history.push({ role: "assistant", content: full });
+        yield { chunk: "", provider, done: true };
+        return;
+      }
+    }
+
+    yield { chunk: "सभी AI providers अभी उपलब्ध नहीं हैं। बाद में फिर पूछें।", provider: "local_fallback", done: false };
+    yield { chunk: "", provider: "local_fallback", done: true };
+  },
+};
+
+=== STEP 11: electron/services/ttsService.cjs ===
+
+'use strict';
+const say = require("say");
+const { promisify } = require("util");
+
+// Check network reachability for Edge TTS
+async function isOnline() {
+  try {
+    await fetch("https://speech.platform.bing.com", { signal: AbortSignal.timeout(700), method: "HEAD" });
+    return true;
+  } catch { return false; }
+}
+
+module.exports = {
+  async speak(text, voice = "hi-IN-SwaraNeural") {
+    const online = await isOnline();
+
+    if (online) {
+      // Edge TTS via unofficial API (works free in 2026)
+      try {
+        const { EdgeTTS } = require("edge-tts");   // if available
+        const tts = new EdgeTTS();
+        const audioBuffer = await tts.synthesize(text, voice);
+        return { success: true, audio: audioBuffer.toString("base64"), format: "mp3" };
+      } catch { /* fallback */ }
+    }
+
+    // Offline fallback — system TTS (say module)
+    return new Promise((resolve) => {
+      say.speak(text, null, 1.0, (err) => {
+        if (err) resolve({ success: false, message: err.message });
+        else resolve({ success: true, audio: null, format: "native" });
+      });
+    });
+  },
+
+  stop() { say.stop(); },
+};
+
+=== STEP 12: electron/services/voiceService.cjs ===
+
+In 2026, for Electron desktop the best approach is:
+1. Use Web Speech API inside the renderer (browser's built-in, zero install)
+2. Use whisper-node for high-accuracy offline mode (75 MB model)
+
+For Web Speech API: NO changes needed to the renderer — it already uses
+browser SpeechRecognition. Just skip the Vosk binary.
+
+For whisper-node (optional high-accuracy mode):
+  npm install whisper-node
+  npx whisper-node download    (downloads ggml-tiny.bin, 75 MB)
+
+'use strict';
+// Only load whisper-node if available (optional dep)
+let WhisperNode = null;
+try { WhisperNode = require("whisper-node").whisper; } catch {}
+
+let whisperModel = null;
+let isListening = false;
+
+module.exports = {
+  isAvailable() { return Boolean(WhisperNode); },
+  isListening() { return isListening; },
+
+  async transcribeFile(audioPath) {
+    if (!WhisperNode) return { success: false, message: "whisper-node not installed" };
+    const result = await WhisperNode(audioPath, {
+      modelName: "tiny",
+      whisperOptions: { language: "auto", word_timestamps: false },
+    });
+    return { success: true, message: "Done", data: { text: result.map(r => r[2]).join(" ") } };
+  },
+
+  getRecommendedMode() {
+    // For Electron desktop: Web Speech API is enough and has zero install overhead
+    return WhisperNode ? "whisper" : "web-speech";
+  },
+};
+
+=== STEP 13: electron/services/dbService.cjs ===
+
+'use strict';
+const Database = require("better-sqlite3");
+const path = require("path");
+const { app } = require("electron");
+const { randomUUID } = require("crypto");
+
+let _db = null;
+
+function getDb() {
+  if (_db) return _db;
+  const dbPath = path.join(app.getPath("userData"), "pika.db");
+  _db = new Database(dbPath);
+  _db.pragma("journal_mode = WAL");
+  _db.pragma("foreign_keys = ON");
+  initSchema(_db);
+  return _db;
+}
+
+function initSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY, text TEXT NOT NULL,
+      trigger_time TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      status TEXT NOT NULL DEFAULT 'active'
+    );
+    CREATE INDEX IF NOT EXISTS idx_rem ON reminders(status, trigger_time);
+    CREATE TABLE IF NOT EXISTS command_log (
+      id TEXT PRIMARY KEY, command_type TEXT, category TEXT, action TEXT,
+      params TEXT, status TEXT, message TEXT, duration_ms INTEGER DEFAULT 0,
+      timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cmd ON command_log(timestamp DESC);
+    CREATE TABLE IF NOT EXISTS snippets (
+      trigger TEXT PRIMARY KEY, content TEXT NOT NULL,
+      use_count INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY, started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT, message_count INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS conversation (
+      id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL,
+      provider TEXT, session_id TEXT NOT NULL,
+      timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+module.exports = {
+  // Settings
+  setSetting(key, value) {
+    getDb().prepare(
+      "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')"
+    ).run(key, typeof value === "string" ? value : JSON.stringify(value));
+  },
+  getSetting(key, def = null) {
+    const row = getDb().prepare("SELECT value FROM settings WHERE key=?").get(key);
+    return row ? row.value : def;
+  },
+  // Reminders
+  addReminder(text, triggerIso) {
+    const id = randomUUID();
+    getDb().prepare("INSERT INTO reminders(id, text, trigger_time) VALUES(?,?,?)").run(id, text, triggerIso);
+    return id;
+  },
+  getActiveReminders() {
+    return getDb().prepare("SELECT * FROM reminders WHERE status='active' ORDER BY trigger_time").all();
+  },
+  updateReminderStatus(id, status) {
+    getDb().prepare("UPDATE reminders SET status=? WHERE id=?").run(status, id);
+  },
+  // Command log
+  logCommand(type, category, action, params, status, message, durationMs = 0) {
+    getDb().prepare(
+      "INSERT INTO command_log(id, command_type, category, action, params, status, message, duration_ms) VALUES(?,?,?,?,?,?,?,?)"
+    ).run(randomUUID(), type, category, action, JSON.stringify(params || {}), status, message, durationMs);
+  },
+  // Snippets
+  addSnippet(trigger, content) {
+    getDb().prepare("INSERT INTO snippets(trigger, content) VALUES(?,?) ON CONFLICT(trigger) DO UPDATE SET content=excluded.content").run(trigger, content);
+  },
+  getSnippets() { return getDb().prepare("SELECT * FROM snippets ORDER BY use_count DESC").all(); },
+  deleteSnippet(trigger) { getDb().prepare("DELETE FROM snippets WHERE trigger=?").run(trigger); },
+  // Prune
+  prune(days = 30) {
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    let total = 0;
+    for (const [t, c] of [["command_log","timestamp"],["conversation","timestamp"]]) {
+      const r = getDb().prepare(`DELETE FROM ${t} WHERE ${c} < ?`).run(cutoff);
+      total += r.changes;
+    }
+    getDb().exec("VACUUM");
+    return total;
+  },
+};
+
+=== STEP 14: electron/services/commandRouter.cjs ===
+
+'use strict';
+const system  = require("./systemService.cjs");
+const power   = require("./powerService.cjs");
+const file    = require("./fileService.cjs");
+const drive   = require("./driveService.cjs");
+const volume  = require("./volumeService.cjs");
+const screen  = require("./screenService.cjs");
+const proc    = require("./processService.cjs");
+const network = require("./networkService.cjs");
+const db      = require("./dbService.cjs");
+const { shell } = require("electron");
+const os = require("os");
+const { randomUUID } = require("crypto");
+
+const CONFIRM_REQUIRED = new Set([
+  "system:shutdown","system:restart","system:hibernate",
+  "files:delete","processes:kill","disk:cleanup_temp",
+]);
+
+const pendingConfirm = new Map();
+
+const APP_MAP = {
+  chrome:"chrome", "google chrome":"chrome", firefox:"firefox",
+  notepad:"notepad", "vs code":"code", vscode:"code",
+  calculator:"calc", calc:"calc", terminal:"wt",
+  explorer:"explorer", spotify:"spotify", discord:"discord",
+};
+
+const URL_MAP = {
+  youtube:"https://youtube.com", google:"https://google.com",
+  github:"https://github.com", gmail:"https://mail.google.com",
+  twitter:"https://x.com", facebook:"https://facebook.com",
+  instagram:"https://instagram.com", reddit:"https://reddit.com",
+  stackoverflow:"https://stackoverflow.com", wikipedia:"https://wikipedia.org",
+  linkedin:"https://linkedin.com", amazon:"https://amazon.in",
+  flipkart:"https://flipkart.com", netflix:"https://netflix.com",
+};
+
+function safeEval(expr) {
+  // Whitelist-only math using mathjs limited scope
+  try {
+    const { create, all } = require("mathjs");
+    const math = create(all, {});
+    const scope = {};
+    const result = math.evaluate(expr, scope);
+    if (typeof result !== "number" || !isFinite(result)) throw new Error("not a number");
+    if (Math.abs(result) > 1e15) throw new Error("too large");
+    return { success: true, message: `${expr} = ${result}`, data: { result } };
+  } catch (e) {
+    return { success: false, message: "अमान्य एक्सप्रेशन।", data: null };
+  }
+}
+
+async function route(msg, emitEvent) {
+  const { type, category, action, params = {} } = msg;
+  const p = params || {};
+
+  if (type === "command" && category === "_confirm") {
+    const cid = p.confirmation_id;
+    if (action === "approve" && pendingConfirm.has(cid)) {
+      const original = pendingConfirm.get(cid);
+      pendingConfirm.delete(cid);
+      return route(original, emitEvent);
+    }
+    pendingConfirm.delete(cid);
+    return { success: true, message: "रद्द किया गया।", data: null };
+  }
+
+  const key = `${category}:${action}`;
+  if (CONFIRM_REQUIRED.has(key) && !p.confirmed) {
+    const cid = randomUUID();
+    pendingConfirm.set(cid, { ...msg, params: { ...p, confirmed: true } });
+    return { type: "response", status: "confirmation_required",
+             message: `क्या आप ${category}/${action} करना चाहते हैं?`,
+             confirmation_id: cid, data: null };
+  }
+
+  // Route to services
+  try {
+    switch (category) {
+      case "system": return await system[{
+        cpu:"getCpu", ram:"getRam", battery:"getBattery", disk:"getDisk",
+        full_report:"getFullReport", ip:"getNetworkInfo",
+      }[action] || "getCpu"]?.() ?? { success:false, message:`Unknown info: ${action}` };
+
+      case "power":
+      case "system":
+        if (["shutdown","restart","sleep","lock","hibernate","logoff"].includes(action))
+          return await power[action](p.delay);
+        break;
+
+      case "info":
+        if (action === "ip") return await network.getNetworkInfo();
+        if (action === "cpu") return await system.getCpu();
+        if (action === "ram") return await system.getRam();
+        if (action === "battery") return await system.getBattery();
+        if (action === "disk") return await system.getDisk();
+        if (action === "full_report") return await system.getFullReport();
+        if (action === "time") return { success:true, message: new Date().toLocaleTimeString("hi-IN"), data:null };
+        if (action === "date") return { success:true, message: new Date().toLocaleDateString("hi-IN", { weekday:"long", day:"numeric", month:"long", year:"numeric" }), data:null };
+        break;
+
+      case "volume":
+        if (action === "up")      return await volume.volumeUp(p.amount);
+        if (action === "down")    return await volume.volumeDown(p.amount);
+        if (action === "set")     return await volume.volumeSet(p.percent || p.level || 50);
+        if (action === "mute" || action === "unmute") return await volume.mute();
+        break;
+
+      case "files":
+        if (action === "create_file")   return await file.createFile(p.path, p.content);
+        if (action === "create_folder") return await file.createFolder(p.path);
+        if (action === "read")          return await file.readFile(p.path);
+        if (action === "write")         return await file.writeFile(p.path, p.content);
+        if (action === "delete")        return await file.deleteFile(p.path);
+        if (action === "rename")        return await file.renameFile(p.path, p.new_path);
+        if (action === "list")          return await file.listDirectory(p.path);
+        if (action === "open_explorer") { shell.openPath(p.path || os.homedir()); return { success:true, message:"खोल दिया।", data:null }; }
+        break;
+
+      case "disk":
+        if (action === "list_drives") return await drive.listDrives();
+        break;
+
+      case "screen":
+        if (action === "screenshot") return await screen.takeScreenshot();
+        break;
+
+      case "processes":
+        if (action === "list") return await proc.listProcesses();
+        if (action === "kill") return await proc.killProcess(p.name_or_pid);
+        break;
+
+      case "network":
+        if (action === "ip") return await network.getNetworkInfo();
+        break;
+
+      case "apps":
+        if (action === "open") {
+          const name = (p.name || "").toLowerCase().trim();
+          const exe = APP_MAP[name];
+          const url = URL_MAP[name];
+          if (url) { shell.openExternal(url); return { success:true, message:`${p.name} खोला।`, data:null }; }
+          if (exe) { shell.openExternal(exe).catch(() => {}); return { success:true, message:`${p.name} खोला।`, data:null }; }
+          shell.openExternal(`https://www.google.com/search?q=${encodeURIComponent(name)}`);
+          return { success:true, message:`"${name}" सर्च कर रहा हूँ।`, data:null };
+        }
+        break;
+
+      case "web":
+        if (action === "open_site") {
+          const url = URL_MAP[(p.name || "").toLowerCase()] || p.name;
+          shell.openExternal(url.startsWith("http") ? url : `https://${url}`);
+          return { success:true, message:`${p.name} खोला।`, data:null };
+        }
+        if (action === "search") {
+          shell.openExternal(`https://www.google.com/search?q=${encodeURIComponent(p.query || "")}`);
+          return { success:true, message:`सर्च कर रहा हूँ।`, data:null };
+        }
+        break;
+
+      case "calculator":
+        if (action === "eval") return safeEval(p.expression || "");
+        break;
+
+      case "password":
+        if (action === "generate") {
+          const { randomBytes } = require("crypto");
+          const len = Math.max(8, p.length || 16);
+          const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+          let pw = "";
+          const bytes = randomBytes(len * 2);
+          for (let i = 0; i < len; i++) pw += chars[bytes[i] % chars.length];
+          return { success:true, message:"पासवर्ड जनरेट हुआ।", data:{ password: pw } };
+        }
+        break;
+
+      case "text_expand":
+        if (action === "add")    { db.addSnippet(p.trigger, p.content); return { success:true, message:"स्निपेट जोड़ा।", data:null }; }
+        if (action === "list")   return { success:true, message:"स्निपेट्स", data:{ snippets: db.getSnippets() } };
+        if (action === "delete") { db.deleteSnippet(p.trigger); return { success:true, message:"हटाया।", data:null }; }
+        break;
+
+      case "config":
+        if (action === "switch_provider") {
+          const llm = require("./llmService.cjs");
+          llm.setProvider(p.provider);
+          return { success:true, message:`${p.provider} पर switch।`, data:null };
+        }
+        break;
+
+      default:
+        return { success:false, message:`अज्ञात category: ${category}`, data:null };
+    }
+  } catch (e) {
+    return { success:false, message:String(e.message), data:null };
+  }
+  return { success:false, message:`अज्ञात action: ${category}/${action}`, data:null };
+}
+
+module.exports = { route };
+
+=== STEP 15: Rewrite electron/main.cjs (key changes) ===
+
+Import services and set up IPC. Remove Python spawn entirely.
+
+  const commandRouter = require("./services/commandRouter.cjs");
+  const llmService    = require("./services/llmService.cjs");
+  const ttsService    = require("./services/ttsService.cjs");
+  const system        = require("./services/systemService.cjs");
+  const { MobileGateway } = require("./services/mobileServer.cjs");
+
+  function registerIpcHandlers() {
+    ipcMain.handle("pika:command", async (_e, msg) => {
+      const t0 = Date.now();
+      const result = await commandRouter.route(msg, (evt) => {
+        mainWindow?.webContents.send("pika:bridge-event", evt);
+      });
+      // Log to DB
+      try {
+        const db = require("./services/dbService.cjs");
+        db.logCommand("command", msg.category, msg.action, msg.params,
+          result.success ? "success" : "error", result.message, Date.now() - t0);
+      } catch {}
+      return result;
+    });
+
+    ipcMain.handle("pika:tts", async (_e, { text, voice }) => {
+      return ttsService.speak(text, voice);
+    });
+
+    ipcMain.handle("bridge:status", () => ({ running: true, mode: "node-native" }));
+    ipcMain.handle("bridge:restart", () => ({ running: true }));
+
+    // Window controls (same as before)
+    ipcMain.handle("window:minimize", () => mainWindow?.minimize());
+    ipcMain.handle("window:maximize", () => { mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize(); return mainWindow?.isMaximized(); });
+    ipcMain.handle("window:close", () => mainWindow?.hide());
+    ipcMain.handle("window:toggle-mini", () => toggleMiniMode());
+    ipcMain.handle("app:info", () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform, isDesktop: true, mode: "node-native" }));
+    ipcMain.handle("shell:open-external", (_e, url) => shell.openExternal(url));
+    ipcMain.handle("shell:open-path", (_e, p) => shell.openPath(p));
+    ipcMain.handle("dialog:pick-file", async () => { const r = await dialog.showOpenDialog(mainWindow, { properties:["openFile"] }); return r.canceled ? null : r.filePaths[0]; });
+    ipcMain.handle("dialog:pick-folder", async () => { const r = await dialog.showOpenDialog(mainWindow, { properties:["openDirectory"] }); return r.canceled ? null : r.filePaths[0]; });
+  }
+
+  // LLM streaming — IPC cannot stream, so use WebSocket push via mobile gateway
+  // OR implement chunked response using ipcMain.handle + async generator polyfill.
+  // RECOMMENDED: add a "pika:llm-start" IPC that sends chunks back via
+  // mainWindow.webContents.send("pika:llm-chunk", {chunk, provider, done, id})
+
+  ipcMain.handle("pika:llm-start", async (_e, { text, id }) => {
+    (async () => {
+      for await (const { chunk, provider, done } of llmService.stream(text)) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("pika:llm-chunk", { chunk, provider, done, id });
+        }
+        if (done) break;
+      }
+    })();
+    return { started: true };
+  });
+
+  // System status push — use setInterval in main
+  app.whenReady().then(() => {
+    registerIpcHandlers();
+    createMainWindow();
+    createTray();
+    // No bridge to start — just push status directly
+    setInterval(async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      try {
+        const [cpu, ram, bat] = await Promise.all([
+          require("./services/systemService.cjs").getCpu(),
+          require("./services/systemService.cjs").getRam(),
+          require("./services/systemService.cjs").getBattery(),
+        ]);
+        mainWindow.webContents.send("pika:bridge-event", {
+          type:"event", event:"system_status",
+          data:{ cpu: cpu.data?.percent, ram: ram.data?.percent, battery: bat.data },
+          timestamp: new Date().toISOString()
+        });
+      } catch {}
+    }, 5000);
+
+    startMobileGateway();
+    globalShortcut.register("CommandOrControl+Shift+Space", () => {
+      mainWindow?.show(); mainWindow?.focus();
+      mainWindow?.webContents.send("hotkey:voice-toggle");
+    });
+  });
+
+  // No stopBridge / startBridge needed — no bridge process at all!
+  // Cleanup is trivial: just app.quit()
+
+=== STEP 16: Update src/hooks/useAssistant.ts ===
+
+In desktop mode, use IPC. For LLM, listen to pika:llm-chunk events.
+
+  useEffect(() => {
+    if (!IS_DESKTOP) return;
+
+    // Bridge events (system_status, voice events, etc.)
+    const offEvent = desktop.onBridgeEvent((msg) => handleMessage(JSON.stringify(msg)));
+
+    // LLM streaming chunks
+    const offChunk = window.pikaElectron?.onBridgeEvent?.((msg: any) => {
+      if (msg.event === "pika:llm-chunk" || msg.type === "llm_stream") {
+        // existing llm_stream handler applies
+        handleMessage(JSON.stringify({ type: "llm_stream", ...msg }));
+      }
+    });
+
+    return () => { offEvent(); offChunk?.(); };
+  }, []);
+
+=== STEP 17: Package.json additions ===
+
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:3000 && cross-env NODE_ENV=development electron .\"",
+    "release:win":   "npm run build && electron-builder --win --x64",
+    "release:mac":   "npm run build && electron-builder --mac",
+    "release:linux": "npm run build && electron-builder --linux"
+  }
+
+Note: NO build:bridge script needed — no Python bridge to build!
+
+--------------------------------------------------------------------------------
+HONEST LIMITATIONS OF PURE NODE (2026)
+--------------------------------------------------------------------------------
+
+1. Voice (Hindi offline): whisper-node needs ~75 MB model download on first run.
+   Web Speech API is zero-install but requires internet and has no wake word.
+   SOLUTION: Use Web Speech API as primary, whisper-node as optional upgrade.
+
+2. Wake word background: no good Node solution in 2026 that works when window
+   is hidden. SOLUTION: Global shortcut only (Ctrl+Shift+Space).
+
+3. Keyboard/mouse macros: @nut-tree/nut-js works but requires VC++ Build Tools
+   on Windows. Macro recording is limited vs pyautogui.
+   SOLUTION: Remove advanced macro recording; keep keyboard shortcut simulation.
+
+4. OCR: tesseract.js works but is 3-5x slower than pytesseract.
+   SOLUTION: Accept slower OCR or skip it for v5.
+
+5. Audio media keys: no cross-platform Node solution in 2026.
+   SOLUTION: Use electron.globalShortcut to simulate VK_MEDIA_* keys on Windows.
+
+--------------------------------------------------------------------------------
+FEATURE STATUS IN PURE NODE
+--------------------------------------------------------------------------------
+
+Feature                     Status    Library
+------------------------------------------------------------------
+File CRUD                   DONE      fs/promises
+Drive listing               DONE      drivelist
+CPU/RAM/Battery             DONE      systeminformation
+Volume control              DONE      loudness
+Screenshot                  DONE      screenshot-desktop
+Process list/kill           DONE      ps-list + exec
+App/website launch          DONE      shell.openExternal
+Calculator (safe)           DONE      mathjs
+Password generator          DONE      crypto.randomBytes
+LLM streaming (7 providers) DONE      native fetch
+SQLite persistence          DONE      better-sqlite3
+Mobile gateway              DONE      express + ws
+System tray + PiP           DONE      Electron built-in
+Global hotkey               DONE      Electron built-in
+Hindi TTS (online)          DONE      edge-tts fetch
+Hindi TTS (offline)         PARTIAL   say (SAPI quality)
+Offline Hindi STT           PARTIAL   whisper-node (needs VC++)
+Wake word background        PARTIAL   globalShortcut only
+Mouse/key automation        PARTIAL   @nut-tree/nut-js (build complexity)
+Macro recording             LIMITED   iohook (unstable)
+OCR                         SLOWER    tesseract.js
+Screen recording            TODO      desktopCapturer + MediaRecorder
+PDF tools                   PARTIAL   pdf-lib
+
+--------------------------------------------------------------------------------
+TEST MATRIX — ALL MUST PASS
+--------------------------------------------------------------------------------
+
+BUILD
+[ ] npm run build         → 0 TypeScript errors
+[ ] npm run release:win   → release/Pika-AI-Setup-*.exe (no bridge.exe needed)
+
+CLEAN MACHINE (Python NOT installed — this is the entire point)
+[ ] Installer runs without Python
+[ ] App opens in <2 seconds (no Python startup overhead)
+[ ] "cpu usage" returns real value from systeminformation
+[ ] "desktop par file banao test.txt" creates the file via fs/promises
+[ ] Drive explorer shows real data from drivelist
+[ ] Volume up/down works via loudness
+[ ] Screenshot saves via screenshot-desktop
+[ ] Web Speech API voice input works in Electron Chromium
+[ ] LLM chat streams correctly
+
+LIFECYCLE
+[ ] Quit → no orphan processes (no bridge to orphan!)
+[ ] Launch twice → second exits, first focuses
+
+SECURITY
+[ ] Port 8765 NOT open (no Python bridge to open it)
+[ ] Phone requires PIN before any command
+[ ] Path blocklist works in fileService
+[ ] mathjs safe scope — no code execution
+
+--------------------------------------------------------------------------------
+DELIVERABLES — COMPLETE FILES, NO PLACEHOLDERS
+--------------------------------------------------------------------------------
+
+ 1. electron/services/systemService.cjs    (complete)
+ 2. electron/services/powerService.cjs     (complete)
+ 3. electron/services/fileService.cjs      (complete)
+ 4. electron/services/driveService.cjs     (complete)
+ 5. electron/services/volumeService.cjs    (complete)
+ 6. electron/services/screenService.cjs    (complete)
+ 7. electron/services/processService.cjs   (complete)
+ 8. electron/services/networkService.cjs   (complete)
+ 9. electron/services/llmService.cjs       (complete)
+10. electron/services/ttsService.cjs       (complete)
+11. electron/services/voiceService.cjs     (complete)
+12. electron/services/dbService.cjs        (complete)
+13. electron/services/commandRouter.cjs    (complete)
+14. electron/services/mobileServer.cjs     (complete, PIN auth)
+15. electron/main.cjs                      (complete, no Python spawn)
+16. electron/preload.cjs                   (pikaElectron API)
+17. electron-builder.yml                   (no extraResources for bridge)
+18. package.json                           (postinstall + release scripts)
+19. src/lib/desktop.ts                     (updated)
+20. src/hooks/useAssistant.ts              (IPC path + llm-chunk events)
+21. docs/B-PURE-ELECTRON-ARCHITECTURE.md  (architecture doc)
+22. docs/B-NODE-SERVICES-GUIDE.md         (service-by-service guide)
+23. docs/B-LIMITATIONS.md                 (honest tradeoffs doc)
+24. docs/00-START-HERE.md                 (updated flowchart)
+25. docs/02-ARCHITECTURE.md               (updated)
+
+Every file must be 100% complete. No "// rest unchanged". npm run build passes.
+
+================================================================================
+END OF OPTION B PROMPT
+================================================================================

@@ -1,0 +1,72 @@
+name: Release Publisher
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build Single-File Frontend & Package
+        run: |
+          npx tsc --noEmit
+          npm run build
+          python -m py_compile pc_bridge.py
+
+      - name: Prepare Release Archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-bundle
+          Copy-Item -Path "dist", "pc_bridge.py", "requirements.txt", "start.bat", "start.py", "start.sh", "README.md", ".env.example" -Destination "release-bundle" -Recurse -Force
+          Compress-Archive -Path "release-bundle/*" -DestinationPath "pika-ai-${{ github.ref_name }}.zip" -Force
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pika-ai-${{ github.ref_name }}.zip
+          name: "Pika AI Assistant ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## ⚡ Pika AI Assistant - ${{ github.ref_name }}
+            
+            ### ✨ Highlights:
+            * **🤖 Natural Hinglish AI Personality**: Friendly conversational tone with full PC automation.
+            * **🔊 Edge TTS (Microsoft Neural HD) & Web Speech**: Natural voice with zero robotic fallback.
+            * **🔑 Multi-Key Auto-Rotation**: Support for multiple API keys (Groq, Mistral, Cerebras, DeepSeek, etc.).
+            * **📝 Obsidian Vault Integration**: Direct REST API integration with quick actions.
+            * **🎙️ Continuous STT**: Real-time continuous listening.
+            * **💾 Persistent Storage**: Settings, chats, and states auto-saved.
+            
+            ### 🚀 Quick Start:
+            1. Download and extract `pika-ai-${{ github.ref_name }}.zip`
+            2. Run `start.bat` (Windows) or `python start.py`

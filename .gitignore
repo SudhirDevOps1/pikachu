@@ -1,0 +1,60 @@
+# Node.js dependencies & builds
+node_modules/
+dist/
+dist-electron/
+release/
+build/
+*.tsbuildinfo
+
+# Python environment, caches & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables & personal secrets
+.env
+.env.local
+.env.*.local
+*.local
+pika_data.json
+
+# Vosk offline speech models & downloads (auto-downloaded at runtime)
+models/
+*.zip
+*.tar.gz
+
+# Logs & temp files
+*.log
+pc_bridge.log
+logs/
+temp/
+tmp/
+*.tmp
+*.mp3
+*.wav
+
+# Scratch & patch scripts
+fix*.py
+patch*.py
+kill*.py
+write_engine.py
+recovery*.txt
+*.bak
+
+# IDE & OS specific files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
