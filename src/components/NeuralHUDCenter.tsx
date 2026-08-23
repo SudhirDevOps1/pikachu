@@ -104,23 +104,6 @@ export function NeuralHUDCenter() {
             />
           ))}
 
-          {/* SVG scanning sweep — cinematic radar arc */}
-          <svg className="absolute inset-0" viewBox="0 0 100 100">
-            <defs>
-              <linearGradient id="pika-sweep" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.35" />
-                <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <motion.g
-              animate={{ rotate: 360 }}
-              transition={{ duration: 6, repeat: Infinity, ease: "linear" }}
-              style={{ transformOrigin: "50% 50%" }}
-            >
-              <path d="M 50 50 L 100 50 A 50 50 0 0 0 65 6 Z" fill="url(#pika-sweep)" />
-            </motion.g>
-          </svg>
-
           {/* 8 orbiting neural nodes on outer ring */}
           {Array.from({ length: OUTER_DOTS }).map((_, i) => {
             const angle = (360 / OUTER_DOTS) * i;
