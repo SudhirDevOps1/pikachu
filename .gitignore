@@ -44,9 +44,19 @@ tmp/
 fix*.py
 patch*.py
 kill*.py
+test_*.py
+test*.py
 write_engine.py
 recovery*.txt
 *.bak
+*.txt
+!requirements.txt
+
+# Local temporary notes & test files
+brain.md
+details.md
+showcase.html
+screenshots/
 
 # IDE & OS specific files
 .vscode/
@@ -58,3 +68,4 @@ recovery*.txt
 *.sw?
 .DS_Store
 Thumbs.db
+
