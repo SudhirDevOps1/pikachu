@@ -224,6 +224,56 @@ VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.z
 VOSK_MODEL_DIR = Path(__file__).parent / "models" / "hi"
 DEFAULT_TTS_VOICE = "hi-IN-SwaraNeural"
 
+_vosk_model = None
+
+def ensure_vosk_model():
+    """Background model initializer for offline Vosk STT."""
+    global _vosk_model
+    if not HAS_VOSK or Model is None:
+        return
+    model_paths = [
+        Path(__file__).parent / "models" / "hi",
+        Path(__file__).parent / "models" / "vosk",
+        Path(__file__).parent / "models" / "vosk-model-small-hi-0.22",
+    ]
+    for mp in model_paths:
+        if mp.exists() and ((mp / "am").exists() or (mp / "conf").exists()):
+            try:
+                _vosk_model = Model(str(mp))
+                logger.info(f"Loaded Vosk offline Hindi model from {mp}")
+                return
+            except Exception as ex:
+                logger.warning(f"Failed to load Vosk model from {mp}: {ex}")
+
+def get_vosk_recognizer():
+    global _vosk_model
+    if not HAS_VOSK or KaldiRecognizer is None:
+        return None
+    if _vosk_model is None:
+        ensure_vosk_model()
+    if _vosk_model is not None:
+        try:
+            return KaldiRecognizer(_vosk_model, 16000)
+        except Exception:
+            return None
+    return None
+
+def detect_wake_word(text: str) -> bool:
+    t = text.lower()
+    return any(w in t for w in WAKE_WORDS)
+
+def try_voice_shortcut(text: str):
+    t = text.lower().strip()
+    if any(k in t for k in ["volume up", "awaaz badhao", "aawaz badhao", "आवाज बढ़ाओ"]):
+        return cmd_volume("up", {"amount": 10}), "आवाज़ बढ़ा दी। 🔊"
+    if any(k in t for k in ["volume down", "awaaz kam", "aawaz kam", "आवाज कम"]):
+        return cmd_volume("down", {"amount": 10}), "आवाज़ कम कर दी। 🔉"
+    if any(k in t for k in ["mute", "aawaz band", "आवाज बंद"]):
+        return cmd_volume("mute", {}), "म्यूट कर दिया। 🔇"
+    if any(k in t for k in ["screenshot", "screen shot", "स्क्रीनशॉट"]):
+        return cmd_screen("screenshot", {}), "स्क्रीनशॉट ले लिया! 📸"
+    return None, None
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",

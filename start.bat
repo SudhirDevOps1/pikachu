@@ -191,7 +191,7 @@ echo ====================================================================
 echo.
 
 if exist "pc_bridge.py" (
-    start "Pika AI - PC Bridge" "%USE_PY%" pc_bridge.py
+    start "Pika AI - PC Bridge" cmd /k ""%USE_PY%" pc_bridge.py"
     echo [OK] PC Bridge backend started on ws://localhost:8765
 )
 
