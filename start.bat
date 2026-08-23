@@ -177,12 +177,12 @@ echo   Global Command:  Type 'pika' anywhere in terminal!
 echo ====================================================================
 echo.
 
-if exist "%PROJECT_DIR%\pc_bridge.py" (
-    start "Pika AI - PC Bridge" cmd /k "cd /d ""%PROJECT_DIR%"" && title Pika PC Bridge [ws://localhost:8765] && color 0A && ""%USE_PY%"" pc_bridge.py"
+if exist "pc_bridge.py" (
+    start "Pika AI - PC Bridge" "%USE_PY%" pc_bridge.py
     echo [OK] PC Bridge started on ws://localhost:8765
 )
 
-start "Pika AI - Web UI" cmd /k "cd /d ""%PROJECT_DIR%"" && title Pika Web UI [http://localhost:3000] && color 0D && npm run dev"
+start "Pika AI - Web UI" cmd /k npm run dev
 echo [OK] Web UI server starting...
 
 REM Wait 2 seconds using ping (safe on all Windows environments)

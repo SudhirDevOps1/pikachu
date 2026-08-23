@@ -15,6 +15,13 @@ import time
 import socket
 from pathlib import Path
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).parent.resolve()
 os.chdir(ROOT)
 
@@ -31,12 +38,12 @@ ANSI = {
 def color(c, t): return f"{ANSI.get(c, '')}{t}{ANSI['reset']}"
 
 BANNER = f"""
-{color('cyan', '  ╔══════════════════════════════════════════════════════════════╗')}
-{color('cyan', '  ║')}{color('bold', '   ⚡  PIKA AI ASSISTANT v1.0.0 — PRODUCTION LAUNCHER         ')}{color('cyan', '║')}
-{color('cyan', '  ╚══════════════════════════════════════════════════════════════╝')}
-{color('dim', f'  Project: {ROOT}')}
-{color('dim', f'  Python:  {sys.version.split()[0]} ({PY})')}
-{color('dim', f'  OS:      {platform.system()} {platform.release()}')}
+==================================================================
+   PIKA AI ASSISTANT v1.0.0 -- PRODUCTION LAUNCHER
+==================================================================
+Project: {ROOT}
+Python:  {sys.version.split()[0]} ({PY})
+OS:      {platform.system()} {platform.release()}
 """
 
 def step(n, name): print(f"\n{color('yellow', f'[{n}/6]')} {color('white', name)}")
@@ -151,15 +158,13 @@ import webbrowser
 time.sleep(1.5)
 webbrowser.open("http://localhost:3000")
 
-print(f"\n{color('cyan', '╔══════════════════════════════════════════════════════════════╗')}")
-print(f"{color('cyan', '║')}  {color('green', '🚀 ALL SYSTEMS GO! PIKA IS RUNNING')}                         {color('cyan', '║')}")
-print(f"{color('cyan', '║')}                                                              {color('cyan', '║')}")
-print(f"{color('cyan', '║')}  {color('white', 'Web UI:')}          {color('cyan', 'http://localhost:3000')}                    {color('cyan', '║')}")
-print(f"{color('cyan', '║')}  {color('white', 'PC Bridge:')}       {color('cyan', 'ws://localhost:8765')}                      {color('cyan', '║')}")
-print(f"{color('cyan', '║')}  {color('white', 'Phone Access:')}    {color('cyan', f'http://{lan}:3000')}                      {color('cyan', '║')}")
-print(f"{color('cyan', '║')}  {color('white', 'Global CLI:')}      {color('yellow', 'Type \'pika\' in any terminal!')}           {color('cyan', '║')}")
-print(f"{color('cyan', '║')}                                                              {color('cyan', '║')}")
-print(f"{color('cyan', '║')}  {color('dim', 'Press Ctrl+C here to stop web server')}                   {color('cyan', '║')}")
-print(f"{color('cyan', '╚══════════════════════════════════════════════════════════════╝')}\n")
+print("\n================================================================")
+print("  ALL SYSTEMS GO! PIKA IS RUNNING")
+print("----------------------------------------------------------------")
+print(f"  Web UI:          http://localhost:3000")
+print(f"  PC Bridge:       ws://localhost:8765")
+print(f"  Phone Access:    http://{lan}:3000")
+print("  Global CLI:      Type 'pika' in any terminal!")
+print("================================================================\n")
 
 run(["npm", "run", "dev"], check=False)
