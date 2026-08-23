@@ -127,9 +127,29 @@ export function useAssistant() {
   }, [store]);
 
   // Process a user text input (from typing or voice)
-  const processInput = useCallback((text: string) => {
-    if (!text.trim()) return;
-    store.getState().addMessage({ role: "user", content: text });
+  const lastInputRef = useRef({ text: "", time: 0 });
+  const spokenMessageIds = useRef<Set<string>>(new Set());
+
+  const processInput = useCallback(
+    (text: string) => {
+      const cleanText = text.trim();
+      if (!cleanText) return;
+      
+      const state = store.getState();
+      // Block input if AI is currently thinking or streaming a response
+      if (state.isAiThinking || state.messages.some((m) => m.isStreaming)) {
+        state.addToast({ type: "warning", message: "कृपया पिछले जवाब का इंतज़ार करें... (Please wait)" });
+        return;
+      }
+
+      const now = Date.now();
+      if (lastInputRef.current.text === cleanText && now - lastInputRef.current.time < 500) {
+        console.log("Skipping duplicate rapid input:", cleanText);
+        return;
+      }
+      lastInputRef.current = { text: cleanText, time: now };
+
+      store.getState().addMessage({ id: generateId(), role: "user", content: cleanText });
     store.getState().incCommands();
 
     let result = parseCommand(text);
@@ -377,7 +397,7 @@ export function useAssistant() {
         }
       }
     } else if (msg.type === "llm_stream") {
-      const curId = streamId.current || msg.id;
+      const curId = msg.id;
       if (!curId) return;
       if (!store.getState().messages.find((m) => m.id === curId)) {
         store.getState().addMessage({ id: curId, role: "assistant", content: "", provider: msg.provider, isStreaming: true });
@@ -466,6 +486,7 @@ export function useAssistant() {
         // handled by onclose
       };
       socket.onclose = () => {
+        if (ws.current && ws.current !== socket) return;
         window.clearTimeout(failTimer);
         const wasConnected = store.getState().isConnected;
         store.getState().setConnection("disconnected");

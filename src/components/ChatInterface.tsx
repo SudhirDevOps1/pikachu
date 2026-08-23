@@ -105,7 +105,8 @@ export function ChatInterface() {
           />
           <button
             onClick={send}
-            className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white transition hover:bg-violet-500 active:scale-90"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-md transition active:scale-95"
+            style={{ background: "linear-gradient(135deg, var(--accent), rgba(var(--accent-rgb), 0.8))" }}
           >
             <Send size={18} />
           </button>

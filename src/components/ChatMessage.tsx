@@ -99,8 +99,8 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
         {/* Main Message Box / Inline Editor */}
         <div
           className={cn(
-            "relative rounded-2xl px-4 py-2.5 transition-all duration-200",
-            !isUser && "glass-card text-white/90 border border-white/10 shadow-sm",
+            "relative px-4 py-3 transition-all duration-200",
+            !isUser ? "glass-card text-white/95 rounded-2xl rounded-tl-sm shadow-md" : "rounded-2xl rounded-tr-sm",
             isEditing && "w-full min-w-[280px] md:min-w-[360px]"
           )}
           style={

@@ -130,8 +130,8 @@ export function TranscriptPanel() {
           />
           <button
             onClick={send}
-            className="flex h-9 w-9 items-center justify-center rounded-xl text-white transition active:scale-90"
-            style={{ background: "var(--accent)" }}
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-white shadow-sm transition active:scale-95"
+            style={{ background: "linear-gradient(135deg, var(--accent), rgba(var(--accent-rgb), 0.8))" }}
           >
             <Send size={15} />
           </button>
