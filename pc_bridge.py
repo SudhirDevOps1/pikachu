@@ -1179,33 +1179,35 @@ async def handle_agent_action(ws, msg):
         api_keys = ["no-key"]
     
 
-    # Obsidian Logic
-    obsidian_enabled = params.get("obsidianEnabled", False)
-    obsidian_url = params.get("obsidianUrl", "http://127.0.0.1:27123")
-    obsidian_api_key = params.get("obsidianApiKey", "")
+    # Obsidian Vault Detection & Integration
+    obsidian_enabled = params.get("obsidianEnabled", True)
+    obsidian_url = params.get("obsidianUrl", "http://127.0.0.1:27123").rstrip("/")
+    obsidian_api_key = params.get("obsidianApiKey", "dbf82d623869be56014c25094c549529697c7040585fe45cdd8da40ee9349231")
     
-    sys_prompt = ("You are Pika, a fast, advanced local AI assistant on the user's Windows PC. "
-                  "1. Always respond in short, conversational Hinglish or Hindi (e.g. 'ब्राइटनेस सेट कर दी है' instead of robotic english). "
-                  "2. When asked to create files or folders, create them exactly in the path the user specifies (e.g. Desktop, Documents). "
-                  "3. Use your shell, file, and web tools efficiently and safely. Be quick and to the point.")
-                  
-    if obsidian_enabled and obsidian_url and obsidian_api_key:
-        sys_prompt += (f"\n\n[OBSIDIAN INTEGRATION]\n"
-                       f"You have access to the user's Obsidian Vault via Local REST API.\n"
-                       f"URL: {obsidian_url}\n"
-                       f"Authorization Header: Bearer {obsidian_api_key}\n"
-                       f"You can use curl in your shell tool to interact with it.\n"
-                       f"Examples:\n"
-                       f"- Search: curl -X GET -H \"Authorization: Bearer {obsidian_api_key}\" \"{obsidian_url}/search/?query=YOUR_QUERY\"\n"
-                       f"- Read file: curl -X GET -H \"Authorization: Bearer {obsidian_api_key}\" \"{obsidian_url}/vault/Notes/filename.md\"\n"
-                       f"- Create/Overwrite: curl -X PUT -H \"Authorization: Bearer {obsidian_api_key}\" -H \"Content-Type: text/markdown\" -d \"File Content\" \"{obsidian_url}/vault/filename.md\"\n"
-                       f"- Append/Update: curl -X POST -H \"Authorization: Bearer {obsidian_api_key}\" -H \"Content-Type: text/markdown\" -d \"Appended Content\" \"{obsidian_url}/vault/filename.md\"\n"
-                       f"Use these REST commands when asked to read from or write to Obsidian.")
+    obsidian_vault_path = "E:\\obsidian"
+    try:
+        obs_cfg = Path(os.environ.get("APPDATA", "")) / "obsidian" / "obsidian.json"
+        if obs_cfg.exists():
+            vdata = json.loads(obs_cfg.read_text(encoding="utf-8"))
+            for v in vdata.get("vaults", {}).values():
+                if v.get("open") or not obsidian_vault_path:
+                    obsidian_vault_path = v.get("path", obsidian_vault_path)
+    except Exception:
+        pass
+
+    sys_prompt = (
+        "You are Pika, a fast, advanced local AI assistant on the user's Windows PC.\n"
+        "1. Always respond in short, conversational Hinglish or Hindi (e.g. 'नोट बना दिया है! 📝').\n"
+        "2. When asked to create files or folders, write them directly to the specified path.\n"
+        f"3. [OBSIDIAN VAULT]: The user's Obsidian Vault is at: {obsidian_vault_path}\n"
+        f"   When asked to create, edit, or read Obsidian notes, write/read the markdown file directly inside '{obsidian_vault_path}' (e.g. '{obsidian_vault_path}\\NoteName.md') OR use curl with Local REST API:\n"
+        f"   curl -X PUT -H \"Authorization: Bearer {obsidian_api_key}\" -H \"Content-Type: text/markdown\" -d \"Note Content\" \"{obsidian_url}/vault/NoteName.md\"\n"
+        "4. Be quick, precise, and never hallucinate fake paths."
+    )
 
     last_err = None
 
     for api_key in api_keys:
-        # Base url for agent-mini usually expects openai compatible endpoint without /chat/completions
         base_url = url.replace("/chat/completions", "")
         config_dict = {
             "provider": "local",
@@ -1217,16 +1219,13 @@ async def handle_agent_action(ws, msg):
                 }
             },
             "agent": {
-                "maxIterations": 20,
-                "temperature": 0.7,
-                "systemPrompt": ("You are Pika, a fast, advanced local AI assistant on the user's Windows PC. "
-                                 "1. Always respond in short, conversational Hinglish or Hindi (e.g. 'ब्राइटनेस सेट कर दी है' instead of robotic english). "
-                                 "2. When asked to create files or folders, create them exactly in the path the user specifies (e.g. Desktop, Documents). "
-                                 "3. Use your shell, file, and web tools efficiently and safely. Be quick and to the point. If you need to list files in a directory, do NOT hallucinate a 'list_directory' tool. Instead, use 'run_command' with 'dir' (Windows).")
+                "maxIterations": 8,
+                "temperature": 0.5,
+                "systemPrompt": sys_prompt
             },
             "memory": {"enabled": True, "maxEntries": 1000},
             "tools": {"restrictToWorkspace": False},
-            "workspace": str(Path.home())
+            "workspace": obsidian_vault_path if Path(obsidian_vault_path).exists() else str(Path.home())
         }
         
         try:
