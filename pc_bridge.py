@@ -137,7 +137,7 @@ except Exception:
 # ─── Constants ───────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
 PORT = 8765
-SERVER_VERSION = "1.1.1"
+SERVER_VERSION = "1.2.0"
 DATA_FILE = Path(__file__).parent / "pika_data.json"
 IS_WIN = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"

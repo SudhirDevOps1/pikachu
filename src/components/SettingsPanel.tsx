@@ -645,7 +645,7 @@ export function SettingsPanel() {
       {/* About */}
       <Section icon={Info} title="जानकारी">
         <div className="space-y-1 text-sm text-white/60">
-          <p className="font-semibold text-white">⚡ पिका AI असिस्टेंट v1.1.1</p>
+          <p className="font-semibold text-white">⚡ पिका AI असिस्टेंट v1.2.0</p>
           <p>पूरी तरह लोकल, मल्टी-एजेंट, विज़न और ऑब्सीडियन पावर्ड।</p>
           <p className="text-xs text-white/40">MIT License · React + Vite + Python</p>
         </div>

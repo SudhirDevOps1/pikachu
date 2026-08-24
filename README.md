@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-1.1.1-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
+[![Version](https://img.shields.io/badge/version-1.2.0-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg?style=for-the-badge)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?style=for-the-badge&logo=react)](https://react.dev)
 [![Electron](https://img.shields.io/badge/Electron-41-47848F.svg?style=for-the-badge&logo=electron)](https://www.electronjs.org)
@@ -40,7 +40,7 @@ Pika AI is a highly capable personal AI assistant designed to integrate seamless
 - **Multi-API Key Rotation**: Automatically rotates through comma-separated API keys to seamlessly handle rate limits. Connects to Groq, Mistral, Gemini, DeepSeek, Ollama, and custom OmniRoute endpoints.
 - **Token Telemetry**: Persistent token usage tracking across sessions, categorized by provider.
 
-### 🆕 New — Added in v1.1.1+
+### ✨ New - Added in v1.2.0+
 
 - **Command Palette (Ctrl+K)** — VS Code-style global search for every tab/action (`src/components/CommandPalette.tsx:1`)
 - **Notes Hub (नोट्स)** — Markdown notes, pin, search, localStorage + Obsidian-ready (`src/components/NotesPanel.tsx:1`, `src/store/assistantStore.ts:324`)
