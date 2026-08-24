@@ -216,7 +216,8 @@ export type ToolsSubTab =
   | "translator"
   | "password"
   | "text_expand"
-  | "terminal";
+  | "terminal"
+  | "cursor";
 
 export interface QuickNote {
   id: string;

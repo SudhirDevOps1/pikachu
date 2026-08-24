@@ -30,6 +30,10 @@ import asyncio
 import base64
 import json
 try:
+    import calendar_mcp_stub  # additive calendar sidecar (bina hataye)
+except Exception:
+    pass
+try:
     from agent_mini.agent import AgentLoop, Memory, ToolEvent
     from agent_mini.providers import create_provider
     from pathlib import Path
@@ -316,6 +320,36 @@ for h in logging.getLogger().handlers:
 logger = logging.getLogger("PIKA-Bridge")
 logger.addFilter(_RedactFilter())
 
+# ── additive P0: injection filter + audit + rate-limit (bina kuchh hataye) ──
+_INJECTION_PATTERNS = [r"ignore previous instructions", r"you are now dan", r"reveal system prompt", r"delete all user data", r"do anything now", r"system override", r"jailbreak"]
+def is_injection(text: str) -> bool:
+    low = (text or "").lower()
+    return any(re.search(p, low) for p in _INJECTION_PATTERNS)
+AUDIT_FILE = Path(__file__).parent / "pika_audit.jsonl"
+_RATE: dict = {}
+def check_rate(category: str, action: str, limit: int = 12, window: int = 60) -> bool:
+    import time as _t
+    key = f"{category}.{action}"
+    now = _t.time()
+    arr = _RATE.setdefault(key, [])
+    arr[:] = [t for t in arr if now - t < window]
+    if len(arr) >= limit:
+        return False
+    arr.append(now)
+    return True
+def audit_log(event: str, data: dict):
+    try:
+        AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **data}
+        # redact keys
+        for k in list(rec.keys()):
+            if "key" in k.lower() or "token" in k.lower():
+                rec[k] = "***REDACTED***"
+        with AUDIT_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
 APP_MAP = {
     "chrome": "chrome", "google chrome": "chrome", "firefox": "firefox",
     "brave": "brave", "edge": "msedge", "vs code": "code", "vscode": "code",
@@ -392,8 +426,37 @@ def get_display_scale() -> float:
     except Exception:
         return 1.0
 
+def get_monitors() -> list:
+    """Additive multi-monitor enumeration (virtual coords, no delete)."""
+    mons = []
+    try:
+        if IS_WIN:
+            import ctypes
+            from ctypes import wintypes
+            mons = []
+            def _cb(hMon, hdc, lprc, dwData):
+                r = lprc.contents
+                mons.append({"left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom, "width": r.right-r.left, "height": r.bottom-r.top})
+                return 1
+            try:
+                ctypes.windll.user32.EnumDisplayMonitors(0, 0, ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.RECT), ctypes.c_void_p)(_cb), 0)
+            except Exception:
+                pass
+            if not mons:
+                # fallback single
+                import ctypes as _c
+                w = _c.windll.user32.GetSystemMetrics(0); h = _c.windll.user32.GetSystemMetrics(1)
+                mons = [{"left":0,"top":0,"right":w,"bottom":h,"width":w,"height":h}]
+        else:
+            # linux/mac fallback single
+            mons = [{"left":0,"top":0,"right":1920,"bottom":1080,"width":1920,"height":1080}]
+    except Exception:
+        mons = [{"left":0,"top":0,"right":1920,"bottom":1080,"width":1920,"height":1080}]
+    return mons
+
 def normalize_coords(x: int, y: int) -> tuple:
     s = get_display_scale()
+    # keep virtual multi-monitor coords as-is (may be negative on left monitor)
     return int(x * s), int(y * s)
 
 def bezier_move(x1: int, y1: int, x2: int, y2: int, steps: int = 18):
@@ -1282,6 +1345,96 @@ def cmd_uia(action, params):
             amt = int(params.get("amount", 3))
             pyautogui.scroll(-amt*120 if params.get("direction","down")=="down" else amt*120)
             return ok("स्क्रॉल किया")
+        # ── additive cursor extras (bina purana hataye) ──
+        if action in ("right_click", "right"):
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            if x is not None and y is not None:
+                nx, ny = normalize_coords(int(x), int(y))
+                try: cur = pyautogui.position(); bezier_move(cur.x, cur.y, nx, ny, steps=14); pyautogui.rightClick(nx, ny)
+                except: pyautogui.rightClick(nx, ny)
+                return ok(f"Right click ({nx},{ny}) 🖱️", {"x": nx, "y": ny})
+            pyautogui.rightClick(); return ok("Right click किया 🖱️")
+        if action in ("double_click", "double"):
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            if x is not None and y is not None:
+                nx, ny = normalize_coords(int(x), int(y))
+                try: cur = pyautogui.position(); bezier_move(cur.x, cur.y, nx, ny, steps=14); pyautogui.doubleClick(nx, ny)
+                except: pyautogui.doubleClick(nx, ny)
+                return ok(f"Double click ({nx},{ny}) 🖱️", {"x": nx, "y": ny})
+            pyautogui.doubleClick(); return ok("Double click किया 🖱️")
+        if action == "move":
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            if x is None or y is None: return err("x,y चाहिए")
+            nx, ny = normalize_coords(int(x), int(y))
+            try: cur = pyautogui.position(); bezier_move(cur.x, cur.y, nx, ny, steps=14)
+            except: pyautogui.moveTo(nx, ny)
+            return ok(f"Cursor moved ({nx},{ny})", {"x": nx, "y": ny})
+        if action == "drag":
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            x2 = int(params.get("x2", params.get("x", 0))); y2 = int(params.get("y2", params.get("y", 0)))
+            nx, ny = normalize_coords(x2, y2)
+            try: cur = pyautogui.position(); bezier_move(cur.x, cur.y, nx, ny, steps=12); pyautogui.dragTo(nx, ny, duration=0.3, button="left")
+            except: pyautogui.dragTo(nx, ny)
+            return ok(f"Drag → ({nx},{ny})", {"x": nx, "y": ny})
+        if action == "get_position":
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            p = pyautogui.position(); return ok(f"Cursor ({p.x},{p.y})", {"x": p.x, "y": p.y})
+        if action == "get_monitors":
+            mons = get_monitors()
+            return ok(f"{len(mons)} monitor मिले", {"monitors": mons})
+        if action == "find_text":
+            # OCR click: find Hindi/English text on screen via pytesseract → click
+            try:
+                import pytesseract as _pt
+                from PIL import ImageGrab
+                txt = str(params.get("text","") or params.get("query","") or params.get("name","")).strip()
+                if not txt: return err("text चाहिए")
+                img = ImageGrab.grab()
+                data = _pt.image_to_data(img, lang="eng+hin", output_type=_pt.Output.DICT)
+                low = txt.lower()
+                for i, w in enumerate(data["text"]):
+                    if w and low in w.lower():
+                        x = data["left"][i] + data["width"][i]//2
+                        y = data["top"][i] + data["height"][i]//2
+                        try: cur = pyautogui.position(); bezier_move(cur.x, cur.y, x, y, steps=14); pyautogui.click(x,y)
+                        except: pyautogui.click(x,y)
+                        return ok(f"OCR click '{w}' ({x},{y}) 🖱️", {"x": x, "y": y, "found": w})
+                return err(f"Text '{txt}' screen pe nahi mila")
+            except Exception as ex:
+                return err(f"find_text: {ex}")
+        if action == "find_image":
+            # opencv template match: params.image_b64 (base64 png) or path + multi-monitor aware grab
+            try:
+                import cv2, numpy as np
+                from PIL import ImageGrab
+                import base64 as _b64, io as _io
+                b64 = params.get("image_b64") or params.get("image") or ""
+                thresh = float(params.get("threshold", 0.8))
+                mon_idx = int(params.get("monitor", 0)) if str(params.get("monitor","")).isdigit() else 0
+                if b64.startswith("data:"): b64 = b64.split(",",1)[1]
+                tpl_bytes = _b64.b64decode(b64) if b64 else None
+                if not tpl_bytes: return err("image_b64 चाहिए (base64 png)")
+                tpl = cv2.imdecode(np.frombuffer(tpl_bytes, np.uint8), cv2.IMREAD_COLOR)
+                # multi-monitor bbox
+                try:
+                    mons = get_monitors()
+                    m = mons[min(mon_idx, len(mons)-1)]
+                    screen = ImageGrab.grab(bbox=(m["left"], m["top"], m["right"], m["bottom"]))
+                    off_x, off_y = m["left"], m["top"]
+                except:
+                    screen = ImageGrab.grab(); off_x, off_y = 0,0
+                scr = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
+                res = cv2.matchTemplate(scr, tpl, cv2.TM_CCOEFF_NORMED)
+                _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
+                if maxVal < thresh: return err(f"Image not found (score {maxVal:.2f} < {thresh})")
+                h, w = tpl.shape[:2]; cx = maxLoc[0] + w//2 + off_x; cy = maxLoc[1] + h//2 + off_y
+                if params.get("click"):
+                    try: cur = pyautogui.position(); bezier_move(cur.x, cur.y, cx, cy, steps=14); pyautogui.click(cx, cy)
+                    except: pyautogui.click(cx, cy)
+                    return ok(f"Found & clicked ({cx},{cy}) m{mon_idx} score {maxVal:.2f} 🖱️", {"x": cx, "y": cy, "score": float(maxVal), "monitor": mon_idx})
+                return ok(f"Found ({cx},{cy}) m{mon_idx} score {maxVal:.2f}", {"x": cx, "y": cy, "score": float(maxVal), "monitor": mon_idx})
+            except Exception as ex:
+                return err(f"find_image: {ex}")
         return err(f"अज्ञात uia action: {action}")
     except Exception as e:
         return err(str(e))
@@ -1609,6 +1762,56 @@ def cmd_screen(action, params):
                 except Exception:
                     pass
             return ok("ब्राइटनेस कम कर दी। 🌙")
+        # ── additive screen recording (bina hataye) ──
+        if action in ("start_recording", "start_record"):
+            try:
+                global _rec_flag, _rec_thread, _rec_path
+                if globals().get("_rec_flag"):
+                    return err("Recording already running")
+                import cv2, numpy as np
+                from PIL import ImageGrab
+                fps = int(params.get("fps", 15))
+                mon_idx = int(params.get("monitor", 0)) if str(params.get("monitor","")).isdigit() else 0
+                try:
+                    mons = get_monitors()
+                    m = mons[min(mon_idx, len(mons)-1)]
+                    bbox = (m["left"], m["top"], m["right"], m["bottom"]); w, h = m["width"], m["height"]
+                except:
+                    bbox = None; import ctypes as _c; w=_c.windll.user32.GetSystemMetrics(0); h=_c.windll.user32.GetSystemMetrics(1); mons=[{"width":w,"height":h}]
+                out_dir = Path.home() / "Videos" / "Pika_Recordings"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                _rec_path = str(out_dir / f"rec_{datetime.now():%Y%m%d_%H%M%S}_m{mon_idx}.mp4")
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(_rec_path, fourcc, fps, (w, h))
+                globals()["_rec_flag"] = True
+                def _loop():
+                    import time as _t
+                    while globals().get("_rec_flag"):
+                        try:
+                            img = ImageGrab.grab(bbox=bbox) if bbox else ImageGrab.grab()
+                            frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                            writer.write(frame)
+                        except Exception:
+                            pass
+                        _t.sleep(1.0/max(1,fps))
+                    writer.release()
+                import threading as _th
+                _rec_thread = _th.Thread(target=_loop, daemon=True); _rec_thread.start()
+                return ok(f"Recording started m{mon_idx} {w}x{h}@{fps}fps → {_rec_path} 🎬", {"path": _rec_path, "monitor": mon_idx, "fps": fps})
+            except Exception as ex:
+                return err(f"record start: {ex}")
+        if action in ("stop_recording", "stop_record"):
+            try:
+                if not globals().get("_rec_flag"):
+                    return err("No active recording")
+                globals()["_rec_flag"] = False
+                import time as _t; _t.sleep(0.6)
+                p = globals().get("_rec_path","")
+                return ok(f"Recording stopped → {p} ⏹️", {"path": p})
+            except Exception as ex:
+                return err(f"record stop: {ex}")
+        if action == "recording_status":
+            return ok("recording" if globals().get("_rec_flag") else "idle", {"recording": bool(globals().get("_rec_flag")), "path": globals().get("_rec_path","")})
 
         return err(f"अज्ञात screen action: {action}")
     except Exception as e:
@@ -2201,13 +2404,27 @@ def route_command(data: dict) -> dict:
     category = data.get("category", "")
     action = data.get("action", "")
     params = data.get("params", {}) or {}
+    # additive injection shield (bina kuchh hataye)
+    try:
+        txt = str(params.get("text","") or params.get("query","") or params.get("command","") or "")
+        if is_injection(txt) or is_injection(f"{category} {action}"):
+            audit_log("injection_blocked", {"category": category, "action": action, "text": txt[:120]})
+            return err("⚠️ Suspicious prompt blocked (injection filter)")
+    except Exception:
+        pass
+    if not check_rate(category, action):
+        audit_log("rate_limited", {"category": category, "action": action})
+        return err("⏳ Rate limited — thoda ruk kar try karo")
     handler = ROUTES.get(category)
     if not handler:
         return err(f"अज्ञात category: {category}")
     try:
-        return handler(action, params)
+        res = handler(action, params)
+        audit_log("tool_call", {"category": category, "action": action, "status": res.get("success")})
+        return res
     except Exception as e:
         logger.error(f"route error: {e}")
+        audit_log("tool_error", {"category": category, "action": action, "error": str(e)[:200]})
         return err(str(e))
 
 # ── MCP Tool Manifest (additive, exposes ROUTES as MCP-compatible tools) ──

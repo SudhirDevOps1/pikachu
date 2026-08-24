@@ -34,6 +34,12 @@ function needsConfirm(c: string, a: string): boolean {
 type Handler = (m: RegExpMatchArray) => CommandResult;
 interface Rule { re: RegExp; handle: Handler; }
 
+function stripFiller(s: string): string {
+  // Hindi filler at end: "to jara", "zara", "to", "please", "karke dikhao", "kar do", "ek bar" — strip without removing real app names
+  return s.replace(/\s+(?:to\s*jara|jara|zara|to\s*zara|please|karke\s*dikhao|kar\s*do|karo\s*jara|ek\s*bar|thoda|jara\s*sa)\s*$/i, "").trim()
+    .replace(/\s+to\s*$/i, "").trim();
+}
+
 function cmd(
   category: string, action: string,
   params: Record<string, unknown>, reply: string,
@@ -105,13 +111,23 @@ const RULES: Rule[] = [
   // ══════ APPS ══════
   { re: /(?:mere|mera|pc|computer)\s*(?:mein|me|pe)?\s*(?:kaun\s*kaun\s*se\s*apps?|installed\s*apps?|software|apps?\s*list|konsi\s*app|kya\s*kya\s*install\s*hai)/i, handle: () => cmd("apps","list",{},"📦 Scanning installed apps…",{toast:{type:"info",message:"Scanning apps…"}}) },
   { re: /^(?:apps?\s*list|installed\s*apps?|list\s*apps?|software\s*list|show\s*installed\s*apps)$/i, handle: () => cmd("apps","list",{},"📦 Scanning installed apps…",{toast:{type:"info",message:"Scanning apps…"}}) },
-  { re: /(?:close|band karo|quit|exit)\s+(.+)/i, handle: (m) => cmd("apps","close",{name:m[1].trim()},`❌ Closed ${m[1].trim()}`,{toast:{type:"success",message:`Closed`}}) },
+  { re: /(?:close|band karo|quit|exit)\s+(.+)/i, handle: (m) => { const n=stripFiller(m[1].trim()); return cmd("apps","close",{name:n},`❌ Closed ${n}`,{toast:{type:"success",message:`Closed`}}) } },
+  // High-priority exact app names — before generic open, with filler strip (fixes "notepad kholo to jara" → notepad)
+  { re: /^(?:notepad|editor)(?:\s+(?:kholo|open|launch|to|jara|zara|please))*\s*$/i, handle: () => cmd("apps","open",{name:"notepad"},`📝 Notepad खोल रहा हूँ`,{toast:{type:"success",message:"Notepad"}}) },
+  { re: /notepad|editor/i, handle: () => cmd("apps","open",{name:"notepad"},`📝 Notepad खोल रहा हूँ`,{toast:{type:"success",message:"Notepad"}}) },
+  { re: /paint|mspaint/i, handle: () => cmd("apps","open",{name:"paint"},`🎨 Paint खोल रहा हूँ`) },
+  { re: /(?:calculator|calc)(?:\s+(?:kholo|open))?.*/i, handle: () => cmd("apps","open",{name:"calc"},`🧮 Calculator`) },
+  { re: /task manager|taskmgr/i, handle: () => cmd("apps","open",{name:"task manager"},`⚙️ Task Manager`) },
+  { re: /file explorer|explorer/i, handle: () => cmd("apps","open",{name:"explorer"},`📂 Explorer`) },
   { re: /(?:open|kholo|launch|start|chalaao|chalao)\s+(?:omniroute|omnoirout|omni\s*route)/i, handle: () => cmd("apps","open",{name:"omniroute"},"🌐 Opening OmniRoute",{openUrl:"http://127.0.0.1:20128",toast:{type:"success",message:"Opening OmniRoute 🌐"}}) },
   { re: /(?:open|kholo|launch|start|chalaao)\s+(.+)/i, handle: (m) => {
-      const t=m[1].trim().toLowerCase();
+    let raw = stripFiller(m[1].trim());
+    // If after stripping we got empty or just filler, don't fallback to google
+    if (!raw || /^to$/i.test(raw)) return { parsed: null, reply: "", isLLM: true };
+    const t=raw.toLowerCase();
       const s=WEBSITE_LIST.find((w)=>w.name.toLowerCase().includes(t)||t.includes(w.name.toLowerCase().split(" ")[0]));
       if(s) return cmd("web","open_site",{name:s.name},`🌐 Opening ${s.name}`,{toast:{type:"success",message:`Opening ${s.name}`}});
-      return cmd("apps","open",{name:m[1].trim()},`🚀 Opening ${m[1].trim()}`,{toast:{type:"success",message:`Opening`}});
+      return cmd("apps","open",{name:raw},`🚀 Opening ${raw}`,{toast:{type:"success",message:`Opening`}});
     }},
 
   // ══════ INFO ══════
@@ -153,9 +169,10 @@ const RULES: Rule[] = [
   { re: /(.+?)\s*(?:naam se|name se|ko)?.*(?:whatsapp|vatsap).*(?:message|msg|send|bhejo).*(hi|hello|hy|hai)/i, handle: (m) => cmd("apps","whatsapp_msg",{name:m[1].trim(), text:m[2]}, `📱 WhatsApp: ${m[1].trim()} को मैसेज`) },
 
   // ══════ SCREEN ══════
-  { re: /(?:screenshot|screen shot)/i, handle: () => cmd("screen","screenshot",{},"📸 Screenshot taken!",{toast:{type:"success",message:"Saved ✓"}}) },
-  { re: /(?:start|shuru)\s*(?:screen)?\s*(?:recording|record)/i, handle: () => cmd("screen","start_recording",{},"🎬 Recording started",{toast:{type:"info",message:"Recording…"}}) },
-  { re: /(?:stop|ruko|band)\s*(?:recording)/i, handle: () => cmd("screen","stop_recording",{},"⏹️ Recording stopped",{toast:{type:"success",message:"Saved ✓"}}) },
+  { re: /(?:screenshot|screen shot|screen\s*shot\s*lo|screen\s*shot\s*le|स्क्रीनशॉट)/i, handle: () => cmd("screen","screenshot",{},"📸 Screenshot taken!",{toast:{type:"success",message:"Saved ✓"}}) },
+  { re: /(?:start|shuru|chalu|surur?u)\s*(?:screen)?\s*(?:recording|record|रिकॉर्डिंग)/i, handle: () => cmd("screen","start_recording",{},"🎬 Recording started",{toast:{type:"info",message:"Recording…"}}) },
+  { re: /(?:stop|ruko|band|rok)\s*(?:screen)?\s*(?:recording|record|रिकॉर्डिंग)?/i, handle: () => cmd("screen","stop_recording",{},"⏹️ Recording stopped",{toast:{type:"success",message:"Saved ✓"}}) },
+  { re: /(?:screen\s*recording|recording)\s*(?:ka|ki)?\s*status/i, handle: () => cmd("screen","recording_status",{},"🎬 Status…") },
 
   // ══════ FILES ══════
   { re: /(?:open|kholo)\s+(?:file)?\s*(?:explorer|folder)\s*(?:in|mein)?\s*(desktop|documents|downloads|pictures|music|videos|.+)?/i, handle: (m) => cmd("files","open_explorer",{path:m[1]?.trim()||"home"},"📂 Explorer opened",{toast:{type:"success",message:"Explorer ✓"}}) },
@@ -277,13 +294,25 @@ const RULES: Rule[] = [
   { re: /(?:file explorer|explorer)\s*(?:kholo|open)?/i, handle: () => cmd("apps","open",{name:"explorer"},`📂 Explorer`) },
   { re: /(?:terminal|cmd|powershell)\s*(?:kholo|open)?/i, handle: (m) => cmd("apps","open",{name:m[0].toLowerCase().includes("powershell")?"powershell":m[0].toLowerCase().includes("cmd")?"cmd":"terminal"},`💻 Terminal`) },
 
-  // ══════ UIA / BROWSER / CONNECTORS VOICE ══════
-  { re: /(?:click|tap)\s*(?:on\s+)?(.+)?/i, handle: (m) => cmd("uia","click",{name:m[1]?.trim()||"", text:m[1]?.trim()||""},`🖱️ Click: ${m[1]?.trim()||"center"}`) },
+  // ══════ UIA / CURSOR — additive, high-priority cursor (bina purana hataye) ══════
+  { re: /cursor\s*(?:ko)?\s*(?:center|beech|middle)\s*(?:le\s*jao|lao|karo)?/i, handle: () => cmd("uia","move",{x:960,y:540},`🖱️ Cursor center → (960,540)`,{toast:{type:"success",message:"Center"}}) },
+  { re: /(?:right\s*click|right\s*click\s*karo|daaya\s*click|daya\s*click|right\s*click\s*kar)/i, handle: () => cmd("uia","right_click",{},`🖱️ Right click`) },
+  { re: /(?:double\s*click|double\s*click\s*karo|do\s*bar\s*click|double\s*click\s*kar)/i, handle: () => cmd("uia","double_click",{},`🖱️ Double click`) },
+  { re: /(?:drag|kheecho|drag\s*&?\s*drop|kheench)\s*(?:from\s*)?(\d+)\s*[, ]\s*(\d+)\s*(?:to|tak|se)?\s*(\d+)\s*[, ]\s*(\d+)/i, handle: (m) => cmd("uia","drag",{x:+m[1],y:+m[2],x2:+m[3],y2:+m[4]},`🖱️ Drag (${m[1]},${m[2]})→(${m[3]},${m[4]})`) },
+  { re: /(?:move|le\s*jao)\s*(?:cursor\s*)?(?:to\s*)?(\d+)\s*[, ]\s*(\d+)/i, handle: (m) => cmd("uia","move",{x:+m[1],y:+m[2]},`🖱️ Move (${m[1]},${m[2]})`) },
+  { re: /(?:is|yeh|ye|us)\s*(?:button|batan)\s*(?:pe|par)?\s*(?:click\s*karo|click|dabao)/i, handle: (m) => cmd("uia","click",{name:"button", text:"button"},`🖱️ Button click (image/OCR) — template upload ya OCR`) },
+  { re: /(?:dusre|dusra|second|monitor\s*2)\s*(?:monitor|screen)\s*(?:pe|par)?\s*(?:click|j ao)?/i, handle: () => cmd("uia","get_monitors",{},`🖥️ Monitors check`) },
+  { re: /(?:click|tap)\s*(?:on\s+)?(.+)?/i, handle: (m) => { const n=stripFiller(m[1]?.trim()||""); if(n && /(button|batan)/i.test(n)) return cmd("uia","find_text",{text:n},`🔍 OCR find: ${n}`); return cmd("uia","click",{name:n, text:n},`🖱️ Click: ${n||"center"}`) } },
   { re: /(?:scroll|niche|upar)\s*(?:karo|kar)?\s*(up|down)?/i, handle: (m) => cmd("uia","scroll",{direction:m[1]||"down"},`↕️ Scroll ${m[1]||"down"}`) },
+  { re: /(?:yahan|yahaan)\s*(?:type\s*karo|likho|type)\s*[:\-]?\s*(.+)/i, handle: (m) => cmd("uia","type",{text:m[1].trim()},`⌨️ Type: ${m[1].trim().slice(0,30)}`) },
   { re: /(?:browser|chrome|edge)\s*(?:mein|me)?\s*(.+?)\s*(?:kholo|open|jao)/i, handle: (m) => cmd("browser","open",{url:m[1].trim()},`🌐 Browser: ${m[1].trim()}`) },
   { re: /(?:connect|jodo)\s+(gmail|calendar|slack|notion|github|drive)/i, handle: (m) => cmd("connectors","connect",{id:m[1].toLowerCase()},`🔌 Connecting ${m[1]}`) },
   { re: /(?:disconnect|hatao)\s+(gmail|calendar|slack|notion|github|drive)/i, handle: (m) => cmd("connectors","disconnect",{id:m[1].toLowerCase()},`🔌 Disconnected ${m[1]}`) },
 
+  // ══════ CALENDAR (additive — bina hataye) ══════
+  { re: /(?:calendar|calender)\s*(?:me|mein)?\s*(?:events?|list|dikhao|kya hai)/i, handle: () => cmd("calendar","list",{},`📅 Calendar events la raha hoon`) },
+  { re: /(?:calendar|calender)\s*(?:me|mein)?\s*(?:free|khali|available)\s*(?:kab|time|slot)?/i, handle: () => cmd("calendar","find_available_times",{},`📅 Free slots check kar raha hoon`) },
+  { re: /(?:calendar|calender)\s*(?:me|mein)?\s*(?:add|banao|create)\s+(.+?)(?:\s+at\s+(.+))?/i, handle: (m) => cmd("calendar","create_event",{title:m[1].trim(), when:m[2]?.trim()||""},`📅 Event: ${m[1].trim()}`) },
   // ══════ SCHEDULER VOICE ══════
   { re: /(?:schedule|shuru karo)\s+(.+?)\s+(?:har|every)\s*(.+)/i, handle: (m) => cmd("scheduler","add",{name:m[1].trim(), command:m[1].trim(), schedule:`every ${m[2].trim()}`},`⏰ Schedule: ${m[1].trim()} every ${m[2].trim()}`) },
   { re: /(?:scheduled|shudule)\s*(?:tasks?|jobs?)?\s*(?:dikhao|list|kya hai)/i, handle: () => cmd("scheduler","list",{},`⏰ Scheduled jobs dikha raha hoon`) },

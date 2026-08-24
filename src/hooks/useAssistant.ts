@@ -154,10 +154,22 @@ export function useAssistant() {
   const lastInputRef = useRef({ text: "", time: 0 });
   const spokenMessageIds = useRef<Set<string>>(new Set());
 
+  // additive — prompt-injection shield (bina kuchh hataye)
+  const isInjection = useCallback((t: string) => {
+    const low = t.toLowerCase();
+    const patterns = ["ignore previous instructions", "you are now dan", "reveal system prompt", "delete all user data", "do anything now", "system override", "jailbreak"];
+    return patterns.some((p) => low.includes(p));
+  }, []);
   const processInput = useCallback(
     (text: string) => {
       const cleanText = text.trim();
       if (!cleanText) return;
+      if (isInjection(cleanText)) {
+        store.getState().addToast({ type: "error", message: "⚠️ Suspicious prompt blocked (injection filter)" });
+        store.getState().addMessage({ id: generateId(), role: "assistant", content: "⚠️ यह अनुरोध सुरक्षा कारणों से ब्लॉक किया गया। कृपया सामान्य भाषा में पूछें।" });
+        try { const m="blocked injection: "+cleanText.slice(0,80); const a=JSON.parse(localStorage.getItem("pika_audit")||"[]"); a.push({at:Date.now(),event:"injection_blocked",msg:m}); localStorage.setItem("pika_audit", JSON.stringify(a.slice(-200))); } catch {}
+        return;
+      }
       
       const state = store.getState();
       // Block input if AI is currently thinking or streaming a response
@@ -554,18 +566,20 @@ export function useAssistant() {
         store.getState().setApiHealth(p, res);
       }
     } else if ((msg as any).type === "response") {
-      // Data came back from the bridge → populate the store (UI only, NO TTS here)
-      // TTS is handled by: processInput→triggerTTS (commands) and llm_stream done→triggerTTS (LLM)
       const data = msg.data as any;
+      const isSilentPoll = !!(data && Array.isArray(data.drives)) || (msg.message && /ड्राइव मिले|drives/i.test(msg.message) && data?.drives);
       if (data && Array.isArray(data.drives)) {
         store.getState().setDrives(data.drives);
+        if (isSilentPoll) return; // silent HUD refresh — no chat spam (fixed bar-bar drive)
       }
       if (data && Array.isArray(data.items) && msg.message === "प्रोसेस सूची") {
         store.getState().setProcesses(data.items);
+        return; // silent process poll
       }
       if (msg.status === "error") {
         store.getState().addToast({ type: "error", message: msg.message });
       } else if (msg.message) {
+        if (isSilentPoll) return;
         // Only show in UI — do NOT call triggerTTS (would double-speak with processInput's TTS)
         streamText(msg.message, "pika");
       }

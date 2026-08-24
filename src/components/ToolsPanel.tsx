@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   Calculator as CalcIcon, Languages, KeyRound, QrCode, ScanText,
   FileText, ImageIcon, Type, Copy, Check, RefreshCw, ArrowRightLeft, Plus, Trash2,
-  FolderCog, Save, PenLine, Terminal,
+  FolderCog, Save, PenLine, Terminal, MousePointer2,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { useStore } from "@/store/assistantStore";
@@ -10,6 +10,7 @@ import { useAssistantApi } from "@/hooks/AssistantContext";
 import { GlassCard } from "./GlassCard";
 import { GlowButton } from "./GlowButton";
 import { TerminalPanel } from "./TerminalPanel";
+import { CursorControlHUD } from "./CursorControlHUD";
 import { safeCalc, generatePassword, passwordStrength, generateId, nowIso } from "@/lib/utils";
 import type { ToolsSubTab } from "@/types";
 import { cn } from "@/utils/cn";
@@ -17,6 +18,7 @@ import { cn } from "@/utils/cn";
 const SUBTABS: { id: ToolsSubTab; label: string; icon: typeof CalcIcon }[] = [
   { id: "files", label: "फाइल मैनेजर", icon: FolderCog },
   { id: "terminal", label: "टर्मिनल", icon: Terminal },
+  { id: "cursor", label: "कर्सर", icon: MousePointer2 },
   { id: "calculator", label: "कैलकुलेटर", icon: CalcIcon },
   { id: "translator", label: "अनुवाद", icon: Languages },
   { id: "password", label: "पासवर्ड", icon: KeyRound },
@@ -49,6 +51,7 @@ export function ToolsPanel() {
       <motion.div key={sub} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex-1 overflow-y-auto px-4 py-4 md:px-8">
         {sub === "files" && <FileManagerPro />}
         {sub === "terminal" && <TerminalPanel />}
+        {sub === "cursor" && <CursorControlHUD />}
         {sub === "calculator" && <CalculatorTool />}
         {sub === "translator" && <TranslatorTool />}
         {sub === "password" && <PasswordTool />}

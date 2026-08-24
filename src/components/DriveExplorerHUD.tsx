@@ -29,9 +29,10 @@ export function DriveExplorerHUD() {
   };
 
   useEffect(() => {
+    if (!isConnected) return;
     refresh();
-    const t = setInterval(refresh, 30000);
-    return () => clearInterval(t);
+    const t = window.setInterval(refresh, 90000); // 90s silent poll — no chat spam
+    return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected]);
 
