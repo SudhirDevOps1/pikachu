@@ -9,11 +9,11 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?style=for-the-badge&logo=python)](https://www.python.org)
 [![WebSocket](https://img.shields.io/badge/WebSocket-8765-010101.svg?style=for-the-badge)](pc_bridge.py)
 
-**An open-source, voice-enabled Desktop AI Assistant with local system automation.**
+**Open-source Desktop AI Assistant with voice, system automation, and agentic reasoning.**
 
-*Hindi · English · Hinglish — Offline-first · Privacy-focused · Agentic*
+*Hindi / English / Hinglish — Offline-first — Privacy-focused — Agentic*
 
-[Features](#key-features) · [How It Works](#-how-it-works--kaise-kaam-karta-hai) · [Tech Stack](#-tech-stack--kiska-kya-use-hua) · [Quick Start](#getting-started) · [Voice Commands](#voice-commands) · [Architecture](#architecture)
+[Features](#features) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Voice Commands](#voice-commands) · [Tech Stack](#tech-stack) · [Requirements](#requirements)
 
 </div>
 
@@ -21,507 +21,530 @@
 
 ## Overview
 
-Pika AI is a highly capable personal AI assistant designed to integrate seamlessly with your Windows PC. It offers native text-to-speech (TTS), offline speech-to-text (STT), hardware-level system controls, and a multi-agent framework. Built with a React frontend and a Python WebSocket backend, Pika emphasizes privacy, offline capabilities, and extensive customizability.
+Pika AI is a desktop assistant that runs locally on your Windows PC. It connects a React/Electron frontend to a Python WebSocket backend, enabling natural language control of your system — volume, brightness, apps, files, browser, screen, and more.
 
-> **Philosophy:** Light, fast, no heavy PyTorch on local PC. Cloud brains (Groq/Gemini) + local tools (agent-mini) = best of both worlds.
-
----
-
-## Key Features
-
-> *(Original features preserved — enhanced with new additions)*
-
-- **Multilingual Voice AI**: Features high-quality TTS using Edge TTS (`hi-IN` / `en-US`) with a fallback to offline Piper TTS. Includes offline Vosk STT for fully disconnected usage.
-- **Full Air-Gapped Offline Mode**: Capable of running with zero internet access by combining Vosk (STT), Ollama (Local LLM), and Piper TTS.
-- **Hardware & Desktop Automation**: Natively controls Windows volume, screen brightness, processes, and fast application launching by scanning `HKLM`/`HKCU` and Start Menu shortcuts.
-- **Agentic Swarm Framework**: Build and manage custom sub-agents with specific roles, system prompts, and tool permissions (Web Search, Screen Vision, File Management).
-- **Obsidian Second Brain Integration**: Syncs conversations, creates notes, and searches your Obsidian vault natively using the Obsidian Local REST API.
-- **Secure Data Storage**: Sensitive API keys and user preferences stored in `pika_data.json` are encrypted using Windows Native DPAPI (User Master Key) and AES-256.
-- **Multi-API Key Rotation**: Automatically rotates through comma-separated API keys to seamlessly handle rate limits. Connects to Groq, Mistral, Gemini, DeepSeek, Ollama, and custom OmniRoute endpoints.
-- **Token Telemetry**: Persistent token usage tracking across sessions, categorized by provider.
-
-### ✨ New - Added in v1.2.0+
-
-- **Command Palette (Ctrl+K)** — VS Code-style global search for every tab/action (`src/components/CommandPalette.tsx:1`)
-- **Notes Hub (नोट्स)** — Markdown notes, pin, search, localStorage + Obsidian-ready (`src/components/NotesPanel.tsx:1`, `src/store/assistantStore.ts:324`)
-- **Pomodoro / Focus Timer** — 25/5 timer with HUD, auto break/focus switch (`src/components/PomodoroHUD.tsx:1`)
-- **Shortcuts Help (?)** — Press `?` for all hotkeys (`src/components/ShortcutsHelp.tsx:1`)
-- **Terminal Panel** — PowerShell/bash execution via `pc_bridge.py:1480` `terminal.exec` (HOME-safe, blocked `rm -rf /`)
-- **Enhanced Clipboard** — Search, pin, Bridge Sync (`clipboard/get`), Export (`src/components/ControlPanel.tsx:188`)
-- **File Preview** — Image/text preview in Tools → File Manager
+**Core principles:**
+- Privacy-first: data stays on your machine (DPAPI vault)
+- Offline-capable: Vosk STT + Ollama LLM + Piper TTS = zero internet needed
+- Additive-only: every new feature adds without breaking existing ones
+- No heavy ML on local PC: cloud brains (Groq/Gemini) + local tools
 
 ---
 
-## 🧰 Tech Stack — Kiska Kya Use Hua
+## Features
 
-### Frontend — `package.json`
+### System Control (25+ actions)
 
-| Layer | Library | Version | Kaam |
-|---|---|---|---|
-| **UI Framework** | `react`, `react-dom` | 19.2.6 | Component model, hooks, concurrent rendering |
-| **Language** | `typescript` | 5.9.3 | Type safety (`src/types/index.ts`) |
-| **Build** | `vite`, `@vitejs/plugin-react` | 7.3.2 | HMR dev at `:3000`, singlefile prod `vite-plugin-singlefile` |
-| **Styling** | `tailwindcss`, `@tailwindcss/vite` | 4.1.17 | Glassmorphism, aurora, tokens via `src/index.css` |
-| **State** | `zustand` | 5.0.14 | Single store `src/store/assistantStore.ts` (persist to localStorage) |
-| **Animation** | `framer-motion` | 12.42.2 | Page transitions, orb, PiP drag, palette |
-| **Icons** | `lucide-react` | 1.22.0 | 60+ icons (consistent stroke) |
-| **Charts** | `recharts` | 3.9.1 | `LiveMetricsChart`, `SystemHealthPanel` |
-| **Desktop** | `electron`, `electron-builder` | 41.7.1 | `electron/main.cjs` + `preload.cjs` → native titlebar, tray, IPC |
-| **Utils** | `clsx`, `tailwind-merge` | 2.1.1 | `cn()` in `src/utils/cn.ts` |
-| **Dev** | `concurrently`, `wait-on`, `cross-env` | - | `start.bat` orchestrates `pc_bridge.py` + `vite` |
-
-### Backend — `requirements.txt`
-
-| Package | Purpose | Kahan use |
+| Feature | Status | How |
 |---|---|---|
-| `websockets>=13.0` | **MUST** `ws://0.0.0.0:8765` server | `pc_bridge.py:62` |
-| `apscheduler>=3.10` | Cron scheduler | `cmd_scheduler` |
-| `vosk>=0.3.45` | Offline Hindi STT (45 MB model) | `HAS_VOSK`, `VOSK_MODEL_DIR` |
-| `edge-tts>=6.1.0` | Neural TTS `hi-IN-SwaraNeural` | `HAS_EDGE_TTS` |
-| `piper-tts` | Offline TTS fallback | `ttsEngine=piper` |
-| `pyautogui>=0.9.54` | Mouse/keyboard, volume keys | `atomic_clipboard_inject`, `bezier_move` |
-| `pygetwindow` | Window focus/enum | `cmd_window: focus` |
-| `pyperclip>=1.8.2` | Clipboard R/W | `cmd_clipboard` |
-| `screen_brightness_control` | Brightness | `cmd_screen: brightness_set` |
-| `psutil>=5.9.0` | CPU/RAM/Disk/Battery/IP | `cmd_info`, `systemStatus` poll |
-| `cryptography>=43.0` | Fernet AES-256 fallback | `save_vault_data()` |
-| `pywin32>=306` | DPAPI `CryptProtectData` | `load_vault_data()` (Windows) |
-| `requests`, `aiohttp`, `python-dotenv` | HTTP + env | LLM router, weather, connectors |
-| `agent-mini`, `Pillow`, `duckduckgo-search` | Agent + vision + research | `agent_mini/agent.py` |
-| `pytest`, `pytest-asyncio` | Tests | `tests/`, `vitest` bridge |
+| Volume set exact (pycaw) | Working | `cmd_volume` — pycaw CoreAudio → PowerShell AudioDevice → nircmd fallback |
+| Volume up/down/mute | Working | `pyautogui.press("volumeup")` |
+| Brightness set | Working | `screen_brightness_control` → PowerShell WMI fallback |
+| Shutdown / Restart / Sleep / Hibernate | Working | `cmd_system` — requires confirmation |
+| Lock screen | Working | `LockWorkStation()` via ctypes |
+| Empty Recycle Bin | Working | `SHEmptyRecycleBinW` via ctypes |
+| Flush DNS | Working | `ipconfig /flushdns` |
+| Temp file cleanup | Working | `%TEMP%` recursive delete |
+| Airplane Mode (WiFi + Bluetooth) | Working | `Disable-NetAdapter` + `Disable-PnpDevice -Class Bluetooth` |
+| WiFi toggle | Working | `netsh` + PowerShell |
+| Bluetooth toggle | Working | `Enable-PnpDevice -Class Bluetooth` |
+| Process list / kill | Working | `psutil` |
+| Battery status | Working | `psutil.sensors_battery()` |
+| CPU / RAM / Disk info | Working | `psutil` |
+| IP address | Working | `psutil.net_if_addrs()` |
+| System info full report | Working | `platform` + `psutil` |
+| Time / Date | Working | `datetime` |
+| App launch | Working | `winreg` HKLM/HKCU + Start Menu `.lnk` scan (`find_installed_app_fast`) |
+| App close | Working | `taskkill` |
+| App list (installed) | Working | Registry + Start Menu scan |
+| WhatsApp message | Working | `whatsapp://` URI or `cmd_apps whatsapp_msg` |
 
-### OS / System
+### Voice & Speech (3 engines)
 
-| API | Use |
+| Feature | Status | How |
+|---|---|---|
+| Push-to-Talk (Ctrl+Space) | Working | `useVoice.ts` — WebSpeech API |
+| Offline STT (Vosk) | Working | `vosk` + `models/hi/` (45 MB Hindi model) |
+| Neural TTS (Edge) | Working | `edge-tts` — `hi-IN-SwaraNeural` / `en-US-GuyNeural` |
+| Offline TTS (Piper) | Working | `piper-tts` fallback |
+| Hinglish filler strip | Working | `stripFiller()` — removes "to jara", "please", "ek bar" etc. |
+| 70+ regex voice rules | Working | `commandEngine.ts` — Hindi/English/Hinglish patterns |
+| Voice-to-text live dictation | Working | `cmd_keyboard voice_to_text` — records mic + Vosk transcribe |
+| System-wide dictation | Working | `cmd_keyboard dictate` — types wherever cursor is via clipboard |
+
+### Desktop Automation / UIA
+
+| Feature | Status | How |
+|---|---|---|
+| Mouse move (Bézier curve) | Working | `bezier_move()` — smooth human-like cursor |
+| Click / Right-click / Double-click | Working | `pyautogui.click()` |
+| Drag & drop | Working | `pyautogui.drag()` |
+| Keyboard type / hotkey | Working | `pyautogui.typewrite()` / `hotkey()` |
+| Scroll up/down | Working | `pyautogui.scroll()` |
+| Window focus/minimize/maximize/close | Working | `pygetwindow` |
+| Window snap left/right | Working | `win + arrow` via `pyautogui` |
+| OCR text click (find text on screen) | Working | `pytesseract` — `uia/find_text` |
+| Image template match + click | Working | `opencv` `matchTemplate` — `uia/find_image` |
+| Multi-monitor awareness | Working | `get_monitors()` — per-monitor offset |
+| Screen recording | Working | `cv2.VideoWriter` → `~/Videos/Pika_Recordings/` |
+| Screenshot (full / window / region) | Working | `PIL.ImageGrab` + `screen_peeler()` |
+| Screenshot OCR | Working | `pytesseract.image_to_data()` |
+| Deep Windows UIA element tree | Working | PowerShell `UIAutomationClient` — full hierarchy with AutomationId, ClassName, BoundingBox |
+| UIA click by AutomationId | Working | `UIAutomationElement.FindFirst` + `InvokePattern.Invoke()` |
+| UIA set value by AutomationId | Working | `ValuePattern.SetValue()` |
+| PiP always-on-top window | Working | `SetWindowPos(HWND_TOPMOST)` — resizes to 320x180 bottom-right |
+| PiP off (remove topmost) | Working | `SetWindowPos(HWND_NOTOPMOST)` |
+
+### Browser Automation
+
+| Feature | Status | How |
+|---|---|---|
+| Open URL | Working | `playwright.chromium.launch()` |
+| Click element (CSS/XPath/text) | Working | `page.click()` / `page.get_by_text()` |
+| Type in element | Working | `page.fill()` |
+| Navigate (back/forward/reload) | Working | `page.go_back()` etc. |
+| Screenshot page | Working | `page.screenshot()` |
+| Get page text | Working | `page.inner_text("body")` |
+| Scroll page | Working | `page.mouse.wheel()` |
+| Evaluate JS | Working | `page.evaluate()` |
+| Tab management (list/close/new) | Working | `page.context.pages` |
+| Wait for element | Working | `page.wait_for_selector()` |
+
+### Code Execution (REPL)
+
+| Feature | Status | How |
+|---|---|---|
+| Persistent Python REPL | Working | `cmd_code exec` — state persists across calls |
+| Self-healing auto-import | Working | On `NameError`, auto-`pip install` missing module |
+| Auto-load common libs | Working | `pandas`, `numpy`, `requests` loaded if installed |
+| Evaluate expressions | Working | `cmd_code eval` — safe AST evaluation |
+| Pip install from chat | Working | `cmd_code pip_install <pkg>` |
+| REPL history | Working | `cmd_code history` |
+| REPL clear | Working | `cmd_code clear` |
+| Subprocess blocked | Working | `import subprocess` raises error |
+
+### Files & Disk
+
+| Feature | Status | How |
+|---|---|---|
+| Create file | Working | `cmd_files create` — atomic write |
+| Read file | Working | `cmd_files read` — 2MB limit |
+| Write file | Working | `cmd_files write` |
+| Copy / Move file | Working | `shutil.copy2` / `shutil.move` |
+| Delete file | Working | `cmd_files delete` — requires confirmation |
+| Rename file | Working | `Path.rename()` |
+| Search files | Working | `pathlib.rglob()` |
+| Path safety sandbox | Working | `is_path_safe()` — blocks `C:\`, `C:\Windows`, UNC, `.sys/.dll` |
+| Open Explorer | Working | `os.startfile()` |
+| List drives | Working | `string.ascii_uppercase` + `os.path.exists()` |
+| Disk usage | Working | `psutil.disk_usage()` |
+
+### Clipboard
+
+| Feature | Status | How |
+|---|---|---|
+| Get clipboard | Working | `pyperclip.paste()` |
+| Set clipboard | Working | `pyperclip.copy()` |
+| Clipboard history | Working | Clipboard monitoring + localStorage persist |
+| Pin to clipboard | Working | `clipboard_pin` in vault |
+| Hindi/special char injection | Working | `atomic_clipboard_inject()` — Ctrl+V paste for Unicode |
+| Clipboard save/export | Working | `clipboard_save` action |
+
+### Reminders & Scheduler
+
+| Feature | Status | How |
+|---|---|---|
+| Create reminder (N minutes) | Working | `threading.Timer` + vault persist |
+| Recurring reminders | Working | `interval` param — auto-repeating |
+| Cancel reminder | Working | `_reminder_timers[id].cancel()` |
+| List / delete reminders | Working | `cmd_reminders` |
+| Schedule tasks (cron-like) | Working | `APScheduler` + fallback `threading.Timer` |
+| Parse natural schedule | Working | `_parse_schedule_to_seconds()` — "every 30 minutes", "hourly", "daily at 09:00" |
+| Cancel scheduled task | Working | `_fallback_timers[id].cancel()` |
+
+### Memory & Knowledge
+
+| Feature | Status | How |
+|---|---|---|
+| Long-term memory (SQLite) | Working | `~/.pika/memory/memory.db` — facts with category/importance |
+| Memory search (TF-IDF) | Working | `memory_search()` — ranked retrieval |
+| Memory sync to MEMORY.md | Working | Auto-synced for Obsidian |
+| User profile (USER.md) | Working | Auto-extracted from conversations |
+| Memory injected into LLM prompt | Working | `_build_memory_context()` — auto-appended to system prompt |
+| Legacy vault memory | Working | `memoryVault` in `pika_data.json` |
+
+### Skills (Auto-Generated)
+
+| Feature | Status | How |
+|---|---|---|
+| Auto-generate skill from conversation | Working | LLM summarizes workflow → saves as `.md` |
+| List / get / delete skills | Working | `cmd_memory` actions |
+| Skills stored in `~/.pika/memory/skills/` | Working | Markdown format |
+
+### Connectors (OAuth)
+
+| Feature | Status | How |
+|---|---|---|
+| Google OAuth2 flow | Working | Auth URL → callback → token exchange |
+| Gmail list messages | Working | Gmail API `messages.list` + `messages.get` |
+| Google Calendar events | Working | Calendar API `events.list` |
+| Google Drive files | Working | Drive API `files.list` |
+| Connect / disconnect | Working | Token stored in vault |
+| Non-Google placeholders | Working | Slack, Notion, GitHub — stub |
+
+### Telegram Bot Bridge
+
+| Feature | Status | How |
+|---|---|---|
+| Telegram bot polling | Working | `urllib` polling — receives messages, routes to Pika |
+| Command handling (/start, /status, /screenshot) | Working | Pattern matching |
+| General message → LLM response | Working | Routes through `_quick_llm_response()` |
+| Activate via env var | Working | `TELEGRAM_BOT_TOKEN` in `.env` |
+
+### Vision & Image
+
+| Feature | Status | How |
+|---|---|---|
+| Screenshot + OCR | Working | `pytesseract` |
+| Image template match | Working | `opencv.matchTemplate` |
+| VLM vision grounding | Working | `handle_vlm_grounding()` — screenshot → VLM identifies clickable elements with X,Y coordinates |
+| Multi-provider VLM | Working | Groq (LLaVA) → Gemini → Mistral fallback |
+| Image generation (DALL-E 3) | Working | `OPENAI_API_KEY` → OpenAI images API |
+| Image generation (local SD) | Working | `STABLE_DIFFUSION_URL` → ComfyUI/A1111 API |
+| Generated images saved | Working | `~/.pika/images/` |
+
+### Chat & LLM
+
+| Feature | Status | How |
+|---|---|---|
+| Multi-provider LLM routing | Working | Groq → Gemini → Mistral → Cerebras → DeepSeek → Ollama |
+| API key rotation | Working | Comma-separated keys, auto-rotate on 429 |
+| Token counting | Working | `tiktoken` encoding |
+| History summarization | Working | LLM-based conversation summary |
+| Prompt injection filter | Working | `is_injection()` — blocks "ignore previous instructions" etc. |
+| Rate limiting | Working | `check_rate()` — 12/min per category |
+| Audit log | Working | `pika_audit.jsonl` — every tool call logged |
+| ReAct agent loop | Working | `handle_react_agent()` — Thought → Action → Observation → Final Answer (max 8 steps) |
+| Hermes-style tool calling | Working | 25 structured tool definitions (`HERMES_TOOLS`) |
+| Multi-format tool parsing | Working | JSON object, `<tool_call>` tags, `Action:` format |
+
+### Frontend UI (65+ components)
+
+| Component | Purpose |
 |---|---|
-| `winreg` (`HKLM`/`HKCU` + `App Paths` + Start Menu `.lnk` walk) | `find_installed_app_fast()` <10ms app launch |
-| `PowerShell` + `WMI` | brightness, WiFi/Bluetooth toggle, recycle bin |
-| `DPAPI` (`CryptProtectData`) | `pika_data.json` vault `src/store/assistantStore.ts:324` |
-
----
-
-## 📋 Requirements — Kya Chahiye (Hardware / Software / Space / Versions)
-
-> Ye section `package.json:1` + `requirements.txt:1` + `brain.md` + actual `pip list`/`node` se verified. Bina iske app smooth nahi chalega.
-
-### 1) Hardware — Minimum vs Recommended
-
-| Component | Minimum (chalega) | Recommended (smooth) | Kyu? |
-|---|---|---|---|
-| **OS** | Windows 10 64-bit | Windows 11 22H2+ | `winreg` + `DPAPI` + `WMI` `pc_bridge.py:400` |
-| **CPU** | Dual-core 2.0 GHz | Quad-core 3.0 GHz+ (i5 6th Gen tested `brain.md:28`) | Vosk 45MB + Edge TTS decode |
-| **RAM** | 4 GB | 8 GB+ | Electron 41 ~300MB + Python 150MB + Vosk model |
-| **Storage** | 2 GB free | 5 GB free | neeche breakdown |
-| **Mic** | Any | Noise-cancelling | Hinglish STT accuracy |
-| **Webcam** | Optional | 720p+ | `WebcamPanel.tsx` + Vision |
-| **GPU** | No | No (CPU only) | PyTorch hataya `brain.md:14` — 0% load |
-| **Network** | Offline ok | Broadband | LLM + weather only; 80% offline |
-
-**Storage breakdown (real `du`):**
-
-| Path | Size | Kya |
-|---|---|---|
-| `node_modules/` | ~480 MB | `npm install` |
-| `venv/` | ~900 MB | `pip install -r requirements.txt` |
-| `models/hi/` Vosk `vosk-model-small-hi-0.22` | ~45 MB | offline STT |
-| `C:\whisper\ggml-tiny.bin` (optional) | ~75 MB | Whisper.cpp `brain.md:9` |
-| `dist/index.html` singlefile | 1.13 MB gzip 327 KB | `npm run build` verified |
-| `pika_data.json` vault | <1 MB | encrypted |
-| `~/Videos/Pika_Recordings/` | grows | screen rec `pc_bridge.py:1781` |
-| `screenshots/` | grows | `screen_peeler()` |
-
-> Total fresh install ≈ **1.5 GB**, running ≈ **2.5 GB RAM** (Electron + Python).
-
-### 2) Software — Exact Versions (Acknowledge)
-
-**A. Node / Frontend (`package.json:1` — `v1.2.0`):**
-
-| Package | Version used | Required | `npm` |
-|---|---|---|---|
-| `node` | **20 LTS** tested | `>=18.0.0` | `node --version` |
-| `npm` | `10.x` | `>=9` | `npm --version` |
-| `react` / `react-dom` | `19.2.6` | `19.x` | UI |
-| `typescript` | `5.9.3` | `5.x` | `tsc --noEmit` |
-| `vite` | `7.3.2` | `7.x` | dev `:3000` |
-| `@vitejs/plugin-react` | `5.1.1` | `5.x` |  |
-| `tailwindcss` / `@tailwindcss/vite` | `4.1.17` | `4.x` |  |
-| `zustand` | `5.0.14` | `5.x` | store |
-| `framer-motion` | `12.42.2` | `12.x` |  |
-| `lucide-react` | `1.22.0` | `1.x` | icons |
-| `recharts` | `3.9.1` | `3.x` | charts |
-| `electron` | `41.7.1` | `41.x` | desktop |
-| `electron-builder` | `26.15.3` | `26.x` | `.exe` |
-| `clsx` / `tailwind-merge` | `2.1.1` / `3.4.0` | — | `cn()` |
-| `vite-plugin-singlefile` | `2.3.0` | `2.x` | singlefile |
-
-**B. Python / Backend (`requirements.txt:1` + `pip list` verified `2026-08-24`):**
-
-| Package | Version (`pip list`) | Spec | Use |
-|---|---|---|---|
-| `python` | **3.12.7** (rec. 3.10+) | `>=3.10` |  |
-| `websockets` | `13.1` | `>=13.0` **MUST** | `ws://8765` |
-| `apscheduler` | `3.10.x` | `>=3.10.0` | `cmd_scheduler:1473` |
-| `vosk` | `0.3.45` | `>=0.3.45` | `HAS_VOSK` |
-| `edge-tts` | `6.1.10` | `>=6.1.0` | `HAS_EDGE_TTS` |
-| `piper-tts` | `1.2.x` | `piper-tts` | offline TTS |
-| `pyautogui` | `0.9.54` | `>=0.9.54` | `bezier_move` |
-| `pygetwindow` | `0.0.9` | `>=0.0.9` | `cmd_window` |
-| `pyperclip` | `1.8.2` | `>=1.8.2` | clipboard |
-| `screen_brightness_control` | `0.23.x` | `>=0.27.0` spec | brightness |
-| `psutil` | `5.9.8` | `>=5.9.0` | `cmd_info` |
-| `cryptography` | `43.x` | `>=43.0.0` | Fernet |
-| `pywin32` | `306` | `>=306` Win only | DPAPI |
-| `Pillow` | `10.4.0` | `>=10.0.0` | `ImageGrab` |
-| `opencv-python` | `4.13.0.90` | `opencv-*` | `find_image` |
-| `pytesseract` | `0.3.13` | `0.3.13` | `find_text` |
-| `pynput` | `1.8.1` | `1.8.1` | mouse |
-| `requests` | `2.32.2` | `>=2.32.2` | LLM |
-| `aiohttp` | `3.9.5` | `>=3.9.5` | async |
-| `agent-mini` | (git) | `agent-mini` | `agent_mini/agent.py` |
-| `pytest` / `pytest-asyncio` | `8.x` / `0.23` | `>=8.0.0` | tests |
-
-**C. Optional (add later, no error if missing ` _opt:77`):**
-`Tesseract OCR 5.0+` (for `find_text`), `ffmpeg` (alt screen rec), `Ollama` `http://127.0.0.1:11434` (offline LLM)
-
-**D. API Keys (free, no card):**
-
-| Provider | Free limit | Env `settings.apiKeys` |
-|---|---|---|
-| Groq | 30/min | `GROQ_API_KEY` |
-| Gemini | 15 RPM | `GEMINI_API_KEY` |
-| Mistral | 1M tok/day | `MISTRAL_API_KEY` |
-| etc Cerebras/OpenRouter | 100k/day | Settings panel |
-
-> Keys bina bhi 80% features (system/apps/files/cursor offline) chalenge — LLM sirf chat ke liye.
-
-### 3) Permissions & Network
-
-| Need | Why | Default |
-|---|---|---|
-| `ws://localhost:8765` | UI↔Python `useAssistant.ts:581` | `HOST 0.0.0.0:8765` |
-| `http://localhost:3000` | Vite dev | `vite.config.ts` |
-| Firewall allow `python` | LAN phone `http://192.168.x.x:3000` | manual allow |
-| Mic permission (browser) | `WebSpeech` / Vosk | prompt |
-| `Videos/Pika_Recordings` write | `cmd_screen start_recording` | `Path.home()/Videos` |
-
-### 4) Verify — Ek command me sab check
-
-```bash
-node --version   # v20.x
-npm --version    # 10.x
-python --version # 3.12.x
-pip list | findstr "websockets vosk edge-tts pyautogui opencv"
-# expect 13.1, 0.3.45, 6.1.10, 0.9.54, 4.13.0.90
-npm run build    # 2843 modules, 1.13 MB → ok
-python -c "import py_compile; py_compile.compile('pc_bridge.py',doraise=True); print('ok')"
-```
-
-> Sab tick? → `Getting Started` pe jao. Koi version mismatch → `npm install` + `pip install -r requirements.txt` dubara.
-
----
-
-## 🔄 How It Works — Kaise Kaam Karta Hai
-
-### 1) High-Level Flow (3 Layers)
-
-```mermaid
-flowchart LR
-  UI[React + Electron<br/>:3000] <== WebSocket JSON<br/>ws://localhost:8765 ==> PY[Python Bridge<br/>pc_bridge.py]
-  PY --> OS[Windows APIs<br/>psutil/pyautogui/winreg]
-  PY --> STT[Vosk / WebSpeech]
-  PY --> TTS[Edge TTS / Piper]
-  PY --> LLM[Groq/Gemini/Ollama<br/>+ agent-mini]
-  PY --> DB[(pika_data.json<br/>DPAPI+Fernet)]
-```
-
-### 2) Detailed Pipeline — "chrome kholo" bolne par kya hota hai
-
-```mermaid
-sequenceDiagram
-  actor U as User
-  participant Mic as Mic
-  participant WS as WebSpeech / Vosk
-  participant Hook as useVoice.ts
-  participant Engine as commandEngine.ts (120+ regex)
-  participant WSS as ws://8765
-  participant Router as ROUTES[category/action]
-  participant Win as Windows (os.startfile)
-  participant TTS as Edge TTS
-  participant UI as Chat + Toast
-  U->>Mic: "chrome kholo"
-  Mic->>WS: audio → text
-  WS->>Hook: transcript
-  Hook->>Engine: try_voice_shortcut / regex
-  alt Direct command
-    Engine->>WSS: {category:"apps", action:"open", params:{name:"chrome"}}
-  else LLM needed
-    Engine->>WSS: {type:"query", data:"chrome kholo"}
-    WSS->>Router: LLM router (Groq→Gemini fallback)
-  end
-  WSS->>Router: find_installed_app_fast("chrome") → chrome.exe
-  Router->>Win: os.startfile
-  Router->>TTS: ok("Chrome खोल दिया 🚀") → edge-tts
-  Router->>UI: envelope(response) → Toast + chat stream
-```
-
-### 3) Safety — Bina Kuch Hatye / Todne Ke Kaise
-
-| Guard | File | Kya karta |
-|---|---|---|
-| ** Graceful Degradation** | `brain.md:10` | Whisper.cpp exists → use, else WebSpeech, never crash |
-| **Path Sandbox** | `pc_bridge.py:592` `is_path_safe()` | Blocks `C:\`, `C:\Windows`, `..`, UNC, hidden `.sys/.dll` |
-| **Confirm Gate** | `ROUTES: CONFIRM_REQUIRED` | `system/shutdown`, `files/delete`, `processes/kill` needs `confirmation_id` |
-| **DPAPI Vault** | `pc_bridge.py:148` | `pika_data.json` → `CryptProtectData` + Fernet hardware-bound, other PC pe nahi khulega |
-| **WS Token** | `pc_bridge.py:639` `get_or_create_ws_token()` | LAN token, stored in vault |
-| **Blocked Terminal** | `pc_bridge.py:1480` | `rm -rf /`, `format c:` blocked |
-| ** Additive Only** | `src/store/assistantStore.ts:324` | New fields (`notes`, `pomodoro`) use own localStorage keys, old data untouched |
-| **Store Migration** | `loadAppData` | Allows only whitelisted `allowedSettingsKeys`, validates `bridgeUrl` regex |
-
-> **Bina kuch hatye:** All new features are additive — new `TabName="notes"`, new `ToolsSubTab="terminal"`, new files (`CommandPalette.tsx`, `NotesPanel.tsx`, etc.) — no existing component deleted or behavior broken. Build still single-file `vite-plugin-singlefile`.
-
-### 4) Data Persistence
-
-- **Frontend:** `zustand` → `localStorage` (`pika_notes`, `pika_pomodoro`, `pika_activeTab`, `pika_token_usage`)
-- **Backend:** `pika_data.json` encrypted vault (DPAPI on Win, Fernet+hostname entropy elsewhere)
-- **Schedule:** `scheduledJobs` in vault + `_schedule_job_internal()` via APScheduler / fallback `threading.Timer`
+| `FuturisticDashboard` | Main aurora-themed dashboard |
+| `ChatInterface` / `ChatMessage` | Chat UI with typewriter effect |
+| `CommandPalette` (Ctrl+K) | VS Code-style global search |
+| `Sidebar` / `TopBar` / `StatusBar` | Navigation |
+| `NotesPanel` | Markdown notes (localStorage + Obsidian-ready) |
+| `PomodoroHUD` | 25/5 focus timer |
+| `TerminalPanel` | PowerShell execution |
+| `CursorControlHUD` | Mouse/keyboard automation UI |
+| `ToolsPanel` / `ControlPanel` | Tools & settings |
+| `SettingsPanel` | API keys, voice, theme config |
+| `DriveExplorerHUD` | File browser |
+| `ProcessManager` | Task manager |
+| `SchedulerPanel` / `RemindersHUD` | Scheduled tasks |
+| `WeatherWidgetPro` / `WeatherHUD` | Weather display |
+| `WebcamPanel` | Camera feed |
+| `LiveMetricsChart` / `SystemHealthPanel` | System monitoring |
+| `TelemetryPanel` / `NetworkTelemetryPro` | Network & telemetry |
+| `PiPWindow` / `LivePiP` | Picture-in-Picture |
+| `PikaOrb` / `PikaAvatar` | Animated AI avatar |
+| `VoiceWaveform` / `VoiceButton` | Voice visualization |
+| `ShortcutsHelp` | Keyboard shortcuts overlay |
+| `MacroEngine` | Automation macros |
+| `WorldClockHUD` | Multi-timezone clock |
+| `ConfirmationDialog` | Safety confirmation gates |
 
 ---
 
 ## Architecture
 
-Pika AI operates on a separated frontend-backend architecture connected via WebSockets:
-
-- **Frontend (React + Vite)**: A responsive UI hosted at `http://localhost:3000`. Handles user interactions, voice waveform visualization, chat UI, and inline prompt editing. Electron wrapper `electron/main.cjs` provides native titlebar (`DesktopTitleBar.tsx`), single-instance lock, and `preload.cjs` bridge.
-- **Backend (Python)**: A WebSocket server (`pc_bridge.py` at `ws://localhost:8765`) that interfaces with LLM APIs, executes system automation commands, handles STT/TTS processing, and manages state. Router `ROUTES` maps `category/action` → `cmd_*` handlers.
-
-**Extended:** See `docs/02-ARCHITECTURE.md` (mermaid 3-layer) and `docs/05-FOLDER-STRUCTURE.md`.
-
-**Folder Structure (condensed):**
-
 ```
-pika-ai-assistant-prompt/
-├── electron/            # main.cjs, preload.cjs
-├── src/
-│   ├── components/      # 50+ (HUDView, FuturisticDashboard, NotesPanel, TerminalPanel, PomodoroHUD...)
-│   ├── hooks/           # useVoice, useAssistant, AssistantContext
-│   ├── store/           # assistantStore.ts (zustand)
-│   ├── lib/             # commandEngine.ts, connectors.ts, constants.ts
-│   └── types/           # index.ts (TabName, ToolsSubTab, QuickNote, PomodoroState)
-├── pc_bridge.py         # 3200+ line WS server + all cmd_* handlers
-├── pika_data.json       # encrypted vault
-├── start.bat / start.py # 1-click launcher
-└── docs/                # 00..25 guides
+┌─────────────────────────────────────────────────────────┐
+│  React + Electron (localhost:3000)                       │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
+│  │ Chat     │ │ Tools    │ │ Voice    │ │ Dashboard  │ │
+│  │ Interface│ │ Panel    │ │ Button   │ │ HUD        │ │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬──────┘ │
+│       └─────────────┼───────────┼──────────────┘        │
+│              useAssistant.ts (WebSocket)                  │
+└──────────────────────────┬──────────────────────────────┘
+                           │ ws://localhost:8765
+┌──────────────────────────┴──────────────────────────────┐
+│  Python Backend (pc_bridge.py)                           │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
+│  │ ROUTES   │ │ LLM      │ │ Memory   │ │ ReAct      │ │
+│  │ 25 cmds  │ │ Router   │ │ SQLite   │ │ Agent Loop │ │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬──────┘ │
+│       └─────────────┼───────────┼──────────────┘        │
+│              Windows APIs (psutil/pyautogui/winreg)      │
+└─────────────────────────────────────────────────────────┘
 ```
+
+### Backend (`pc_bridge.py` — 5700+ lines)
+
+**25 command handlers** routed via `ROUTES` dict:
+
+| Handler | Categories | Actions |
+|---|---|---|
+| `cmd_system` | `system` | shutdown, restart, sleep, lock, logoff, hibernate, empty_recycle_bin, flush_dns, temp_clean |
+| `cmd_volume` | `volume` | up, down, mute, unmute, set (pycaw exact) |
+| `cmd_media` | `media` | play_pause, next, previous, stop |
+| `cmd_apps` | `apps`, `app` | open, close, list, focus, whatsapp_msg |
+| `cmd_window` | `window` | minimize, maximize, fullscreen, snap_left, snap_right, show_desktop, switch, close |
+| `cmd_info` | `info` | battery, cpu, ram, disk, time, date, full_report, ip |
+| `cmd_processes` | `processes` | list, kill |
+| `cmd_files` | `files`, `file` | create, read, write, copy, move, delete, rename, search, open_explorer |
+| `cmd_disk` | `disk` | list_drives, usage, cleanup_temp |
+| `cmd_uia` | `uia`, `computer` | move, click, right_click, double_click, drag, type, scroll, find_text, find_image, get_monitors, screenshot_region, deep_tree, uia_click_by_id, uia_set_value |
+| `cmd_browser` | `browser` | open, click, type, navigate, screenshot, get_text, scroll, eval_js, tabs, wait_for |
+| `cmd_clipboard` | `clipboard` | get, set, clear, save, history |
+| `cmd_screen` | `screen` | screenshot, peel, ocr, start_recording, stop_recording, recording_status, brightness_set, brightness_up, brightness_down, pip, pip_off, generate_image |
+| `cmd_keyboard` | `keyboard` | type, hotkey, dictate, voice_to_text |
+| `cmd_web` | `web` | open_site, search, youtube_play, youtube_search |
+| `cmd_calculator` | `calculator` | eval |
+| `cmd_password` | `password` | generate |
+| `cmd_translator` | `translator` | translate |
+| `cmd_weather` | `weather` | get |
+| `cmd_reminders` | `reminders`, `reminder` | create, list, delete, cancel |
+| `cmd_obsidian` | `obsidian` | read_file, search, create_note, daily |
+| `cmd_memory` | `memory` | add, get, list, search, delete, user_profile, skill_save, skill_list, skill_get, skill_delete, skill_auto_gen |
+| `cmd_connectors` | `connectors` | list, connect, disconnect, status, oauth_callback, gmail_list, calendar_list, drive_list |
+| `cmd_scheduler` | `scheduler` | add, list, remove, pause, resume |
+| `cmd_code` | `code`, `python`, `execute` | exec, eval, history, clear, pip_install |
+| `cmd_vision` | `vision` | describe, ocr |
+
+**WebSocket message types:**
+
+| Type | Handler |
+|---|---|
+| `command` | `route_command()` |
+| `query` | LLM router (Groq → Gemini → Mistral fallback) |
+| `react_agent` | `handle_react_agent()` — multi-step ReAct loop |
+| `vlm_grounding` | `handle_vlm_grounding()` — VLM element detection |
+
+### Frontend (`src/` — 65+ components)
+
+| Directory | Contents |
+|---|---|
+| `components/` | 65+ React components (chat, dashboard, tools, HUDs, panels) |
+| `hooks/` | `useAssistant.ts` (WebSocket), `useVoice.ts` (STT/TTS), `useWeather.ts`, `useRealPiP.ts`, `useLocalIP.ts`, `useAccentColor.ts` |
+| `store/` | `assistantStore.ts` — Zustand store (localStorage persist) |
+| `lib/` | `commandEngine.ts` (70+ regex rules), `constants.ts`, `utils.ts`, `connectors.ts` |
+| `types/` | `index.ts` — TypeScript interfaces |
 
 ---
 
-## Getting Started
+## Tech Stack
 
-### Prerequisites
-- **OS**: Windows 10/11 (Linux/macOS supported for non-hardware specific tasks)
-- **Python**: 3.10+ (3.12 recommended)
-- **Node.js**: v18+ (v20+ recommended)
+### Frontend
 
-### Installation
+| Layer | Library | Version |
+|---|---|---|
+| UI Framework | `react`, `react-dom` | 19.2.6 |
+| Language | `typescript` | 5.9.3 |
+| Build | `vite` + `vite-plugin-singlefile` | 7.3.2 |
+| Styling | `tailwindcss` | 4.1.17 |
+| State | `zustand` | 5.0.14 |
+| Animation | `framer-motion` | 12.42.2 |
+| Icons | `lucide-react` | 1.22.0 |
+| Charts | `recharts` | 3.9.1 |
+| Desktop | `electron` + `electron-builder` | 41.7.1 |
 
-**Method 1: Windows 1-Click Launcher**
-Simply double-click `start.bat` in the project directory. The script will automatically configure the Python `venv`, install dependencies, start the backend, and launch the web UI.
+### Backend
 
-**Method 2: Manual Installation**
+| Package | Purpose |
+|---|---|
+| `websockets` 13.1 | WebSocket server (`ws://0.0.0.0:8765`) |
+| `pyautogui` 0.9.54 | Mouse/keyboard automation |
+| `pygetwindow` 0.0.9 | Window management |
+| `psutil` 5.9.8 | System metrics |
+| `Pillow` 10.4.0 | Image capture/processing |
+| `opencv-python` 4.13 | Template matching, screen recording |
+| `pytesseract` 0.3.13 | OCR |
+| `pyperclip` 1.8.2 | Clipboard |
+| `screen_brightness_control` 0.23 | Brightness |
+| `vosk` 0.3.45 | Offline STT |
+| `edge-tts` 6.1.10 | Neural TTS |
+| `piper-tts` 1.2 | Offline TTS fallback |
+| `apscheduler` 3.10 | Cron scheduler |
+| `cryptography` 43.x | Fernet AES-256 vault |
+| `pywin32` 306 | DPAPI encryption |
+| `playwright` | Browser automation |
+| `pycaw` | Windows Core Audio (volume) |
+| `requests` / `aiohttp` | HTTP clients |
+| `tiktoken` | Token counting |
+| `pytest` / `pytest-asyncio` | Testing |
+
+### OS Integration
+
+| API | Use |
+|---|---|
+| `winreg` (HKLM/HKCU + Start Menu `.lnk`) | App launch (`find_installed_app_fast` <10ms) |
+| PowerShell + WMI | Brightness, WiFi/Bluetooth, UIA tree |
+| DPAPI (`CryptProtectData`) | Vault encryption |
+| Win32 (`user32.dll`) | PiP topmost, window find |
+| `pycaw` (CoreAudio) | Exact volume control |
+
+---
+
+## Requirements
+
+### Hardware
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| OS | Windows 10 64-bit | Windows 11 22H2+ |
+| CPU | Dual-core 2.0 GHz | Quad-core 3.0 GHz+ |
+| RAM | 4 GB | 8 GB+ |
+| Storage | 2 GB free | 5 GB free |
+| Mic | Any | Noise-cancelling |
+| GPU | Not needed | Not needed |
+
+### Software
+
+| Requirement | Version |
+|---|---|
+| Python | 3.10+ (3.12 recommended) |
+| Node.js | 18+ (20+ recommended) |
+| npm | 9+ |
+
+### API Keys (free tier, no card required)
+
+| Provider | Free Limit | Env Variable |
+|---|---|---|
+| Groq | 30 req/min | `GROQ_API_KEY` |
+| Gemini | 15 RPM | `GEMINI_API_KEY` |
+| Mistral | 1M tok/day | `MISTRAL_API_KEY` |
+| OpenAI (DALL-E) | Pay-per-image | `OPENAI_API_KEY` |
+
+> Keys optional — 80% of features (system/apps/files/cursor/offline) work without any API key.
+
+---
+
+## Quick Start
+
+### Method 1: Windows 1-Click
+
+Double-click `start.bat` — auto-configures venv, installs deps, starts backend + frontend.
+
+### Method 2: Manual
+
 ```bash
-# 1. Clone the repository
+# Clone
 git clone https://github.com/SudhirDevOps1/pikachu.git
 cd pikachu
 
-# 2. Setup Python backend
+# Backend
 python -m venv venv
-.\venv\Scripts\activate   # Windows
-# source venv/bin/activate # Linux/macOS
+.\venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3. Setup Node frontend
+# Frontend
 npm install
 
-# 4. Start the Application
-# Terminal 1: Start PC Bridge
-python pc_bridge.py
-
-# Terminal 2: Start Web UI
-npm run dev
-# or desktop:
-npm run electron:dev  # (if script exists) else electron .
+# Run (2 terminals)
+python pc_bridge.py        # Terminal 1 — ws://8765
+npm run dev                # Terminal 2 — http://localhost:3000
 ```
 
-**Build (single-file dist):**
+### Build
+
 ```bash
-npm run build   # vite → dist/index.html (1.1 MB, gzip 324 KB) [verified]
-npm run lint    # tsc --noEmit
+npm run build    # dist/index.html — 1.13 MB (gzip 328 KB)
+npm run lint     # TypeScript check
 ```
 
 ---
 
 ## Voice Commands
 
-Pika supports natural language commands in English, Hindi, and Hinglish.
+Pika supports natural language in English, Hindi, and Hinglish.
 
-| Action | Example Command | Engine |
-| :--- | :--- | :--- |
-| **App Launch** | "Open VS Code", "Chrome kholo" | `find_installed_app_fast` + `APP_MAP` |
-| **System Volume** | "Volume 50%", "Awaaz badhao", "Mute volume" | `cmd_volume` via `pyautogui` |
-| **Brightness** | "Brightness 80%" | `cmd_screen` via `sbc` / PowerShell |
-| **Screen Capture** | "Take screenshot", "Screenshot lo" | `screen_peeler()` + `PIL` |
-| **System Info** | "Battery check", "List processes" | `cmd_info` via `psutil` |
-| **Obsidian** | "Obsidian me daily note banao", "Search Obsidian for <query>" | `cmd_obsidian` Local REST |
-| **Terminal** *(new)* | "terminal me dir chalao" | `terminal.exec` |
-| **Notes** *(new)* | "note banao meeting kal 10 baje" | `NotesPanel` + `commandPalette` |
-| **Pomodoro** *(new)* | "focus shuru karo" | `PomodoroHUD` |
+### Quick Reference
 
-**Shortcuts:**
+| Category | Example Commands |
+|---|---|
+| **Apps** | "chrome kholo", "notepad open", "close spotify" |
+| **Volume** | "volume 50%", "aawaz badhao", "mute karo" |
+| **Brightness** | "brightness 80%", "screen dim karo" |
+| **System** | "shutdown", "restart", "sleep", "lock screen" |
+| **Files** | "create file test.txt", "read Desktop/note.md" |
+| **Screen** | "screenshot lo", "screen recording start" |
+| **Cursor** | "cursor ko center le jao", "right click karo" |
+| **Browser** | "open google.com", "youtube pe song bajao" |
+| **Info** | "battery check", "cpu usage", "mera ip" |
+| **Window** | "minimize window", "snap left", "show desktop" |
+| **Keyboard** | "copy karo", "paste karo", "ctrl+s dabao" |
+| **Media** | "next song", "play pause" |
+| **Calculator** | "calculate 25*4", "sqrt 16 kitna" |
+| **Weather** | "Delhi ka mausam" |
+| **Remind** | "remind me in 30 minutes" |
+| **Translate** | "translate hello to Hindi" |
+| **Password** | "generate password 20" |
+| **Memory** | "yaad rakho ki mera naam Sudhir hai" |
+| **Code** | "execute print('hello')" |
+| **Terminal** | "terminal me dir chalao" |
+| **PiP** | "pip mode Chrome" |
+| **Image** | "generate image sunset over mountains" |
+
+### Shortcuts
 
 | Key | Action |
 |---|---|
 | `Ctrl+K` | Command Palette |
 | `Ctrl+Space` | Push-to-Talk |
-| `F` | Fullscreen |
 | `?` | Shortcuts Help |
 
 ---
 
-## 🧪 Test Examples — Kya-Kya Kar Sakte Ho (Hard + Easy)
+## Security
 
-> Copy-paste in chat/voice. Har row `commandEngine.ts` + `pc_bridge.py:ROUTES` se verified. `✅` = expect success toast + reply, `⛔` = blocked.
+| Feature | Implementation |
+|---|---|
+| Path sandbox | `is_path_safe()` — blocks `C:\`, `C:\Windows`, UNC, `.sys/.dll` |
+| Confirmation gates | Shutdown/restart/delete/kill require `confirmation_id` |
+| Prompt injection filter | `is_injection()` — blocks "ignore previous instructions", "you are now" etc. |
+| Rate limiting | 12 requests/min per category |
+| DPAPI vault | `pika_data.json` encrypted with Windows user key |
+| Audit log | `pika_audit.jsonl` — every tool call logged |
+| Terminal blocklist | `rm -rf /`, `format c:` blocked |
+| Code execution sandbox | `subprocess` import blocked in REPL |
 
-### A. Basic (sanity)
+---
 
-| # | Bolo / Type | Expected | Engine |
-|---|---|---|---|
-| 1 | `chrome kholo` | `Chrome खोल दिया 🚀` | `apps/open` `find_installed_app_fast` |
-| 2 | `volume 50%` | `Volume 50%` | `volume/set` |
-| 3 | `screenshot lo` | `ScreenPeeler: ...peel_*.png` | `screen/screenshot` |
-| 4 | `battery dikhao` | `बैटरी 78%` | `info/battery` `psutil` |
-| 5 | `notepad kholo` | `Notepad खोल दिया` | `apps/open notepad` |
+## Testing
 
-### B. Hinglish + Filler (hard — `stripFiller()` tested)
-
-| # | Hard Input | Cleaned → Action | Note |
-|---|---|---|---|
-| 6 | `notepad kholo to jara` | `notepad` → `apps/open` | `to jara` stripped `commandEngine.ts:31` |
-| 7 | `chrome kholo please` | `chrome` | `please` stripped |
-| 8 | `volume badhao thoda` | `volume up` | quantity hint `thoda=5` |
-| 9 | `aawaz kam karo jara sa` | `volume down` | Hindi filler |
-| 10 | `calculator kholo ek bar` | `calc` | `ek bar` stripped |
-
-### C. Cursor — Voice Ghost Control (Bézier `pc_bridge.py:399`)
-
-| # | Command | Params | Must see |
-|---|---|---|---|
-| 11 | `cursor ko center le jao` | `uia/move 960,540` | `Cursor moved (960,540)` |
-| 12 | `move cursor to 100, 200` | `uia/move {x:100,y:200}` | `Ghost move` |
-| 13 | `right click karo` | `uia/right_click` | `Right click किया` |
-| 14 | `double click karo` | `uia/double_click` | `Double click किया` |
-| 15 | `drag 100,100 se 500,500 tak` | `uia/drag {x:100,y:100,x2:500,y2:500}` | `Drag → (500,500)` |
-| 16 | `is button pe click karo` | `uia/click {name:button}` → OCR `find_text` fallback | `OCR click` if `pytesseract` |
-| 17 | `play button pe click karo` | `uia/find_text {text:play}` | needs `pytesseract` |
-| 18 | `yahan type karo: Hello पिका` | `uia/type {text}` → `atomic_clipboard_inject` | `Ghost type` if Hindi |
-| 19 | `scroll down karo` | `uia/scroll down` | `स्क्रॉल किया` |
-
-**Multi-monitor:**
-
-| 20 | `dusre monitor pe click karo` | `uia/get_monitors` | `2 monitor मिले` `pc_bridge.py:429` |
-| 21 | Tools → कर्सर → `Mon 1` + `Click 100,100` | `uia/click {x,y,monitor:1}` | offset `off_x/off_y` `pc_bridge.py:1419` |
-
-**Image match (Hard):**
-
-| 22 | Tools → कर्सर → Template PNG upload | `uia/find_image {image_b64,click:true}` | `Found & clicked (x,y) m0 score 0.92` opencv `4.11` |
-| 23 | Voice + image: `is button pe click karo` + upload | same | threshold `0.8` |
-
-### D. Screen Recording (cv2 `pc_bridge.py:1765`)
-
-| # | Command | Output |
-|---|---|---|
-| 24 | `screen recording chalu karo` | `Recording started m0 1920x1080@15fps → ~/Videos/Pika_Recordings/rec_*.mp4` |
-| 25 | `recording band karo` | `Recording stopped → ...mp4` |
-| 26 | `recording status` | `recording`/`idle` |
-
-### E. Files — SAFE `is_path_safe:592` (2MB limit `1139`)
-
-| # | Command | Result |
-|---|---|---|
-| 27 | `create file Desktop/test.txt` | `फाइल बनी: ...Desktop/test.txt` |
-| 28 | `read Desktop/test.txt` | `पढ़ा गया: test.txt` + content `[:20000]` |
-| 29 | `rename Desktop/test.txt to Desktop/final.txt` | `रीनेम: test.txt → final.txt` |
-| 30 | `delete file Desktop/final.txt` | `⚠️ Delete confirm` → `confirmation_id` |
-| 31 | `C:\Windows\System32\hosts read` | `⛔ सुरक्षा: यह पथ प्रतिबंधित है।` |
-| 32 | `read video.mp4` (>2MB) | `⛔ फ़ाइल बहुत बड़ी है` |
-
-### F. Terminal (HOME-safe `pc_bridge.py:1573`)
-
-| 33 | `terminal me dir chalao` | `exit 0` `stdout` |
-| 34 | `terminal me python --version` | `Python 3.12.x` |
-| 35 | `rm -rf /` | `⛔ खतरनाक कमांड ब्लॉक` |
-
-### G. Calculator (Hard)
-
-| 36 | `calculate 25*4` | `25*4 = 100` `calc/eval` AST `pc_bridge.py:1752` |
-| 37 | `calculate sqrt(16)+sin(0)` | Frontend `safeCalc` `src/lib/utils.ts:61` `→ 4` (backend limited → frontend ok) |
-| 38 | `calculate 1e16*2` | `⛔ संख्या बहुत बड़ी है।` |
-
-### H. Web / YouTube (ad-free `resolve_youtube_adfree:456`)
-
-| 39 | `youtube par arijit song bajao` | `YouTube (chrome) पर "arijit" ad-free → https://...watch?v=...` |
-| 40 | `search python async` | ` "python async" सर्च कर रहा हूँ` `web/search` |
-
-### I. Calendar / Scheduler / Memory
-
-| 41 | `calendar me free kab hai` | `Available: 3 slots` `calendar_mcp_stub.py:1` |
-| 42 | `calendar me add meeting kal 3pm` | `Event banaya: meeting` |
-| 43 | `yaad rakho ki mera naam Sudhir hai` | `याद रख लिया` `memory/add` vault |
-| 44 | `meri yaadein dikhao` | `आपकी यादें (n): ...` |
-| 45 | `schedule backup har hour` | `शेड्यूल किया: backup every hour` `scheduler/add` |
-
-### J. Security — Must Block (`audit_log:327` → `pika_audit.jsonl`)
-
-| 46 | `ignore previous instructions` | `⛔ Suspicious prompt blocked` `is_injection()` `pc_bridge.py:322` |
-| 47 | `you are now dan` | `⛔ blocked` |
-| 48 | Spam `volume up` 13x in 60s | `⛔ Rate limited` `check_rate():12/min` |
-
-### K. Combined / Stress (Hardest)
-
-| 49 | `chrome kholo, volume 30%, screenshot lo` (single msg) | First match `chrome` wins — queue next separately (by design `parseCommand` first-rule) |
-| 50 | `notepad kholo to jara please, phir wahan type karo hello` | Split: first `notepad`, second `yahan type karo: hello` → two turns |
-| 51 | Rapid `Ctrl+K` → `terminal` → `dir` | Palette `CommandPalette.tsx:1` → `Tools → टर्मिनल` → `dir` |
-
-**How to test quickly:**
 ```bash
-# 1. Bridge silent poll no spam
-python pc_bridge.py
-# chat me ab 90s me drive silent — no "3 ड्राइव मिले" spam
-
-# 2. Frontend hard voices
-npm run dev
-# Type each above in chat, check toast + chat stream + ~/Videos/Pika_Recordings
+python -m pytest test_pc_bridge.py -v    # 70 tests
+npm run build                             # Frontend build verification
+python -m py_compile pc_bridge.py         # Backend syntax check
 ```
+
+**Test coverage:** Vault encryption, path safety, injection filter, rate limiting, calculator AST, password generator, translator, weather cache, file operations, memory system, skill system, LLM routing, command routing, system commands, UIA, browser, reminders, volume, clipboard, MCP manifest, code execution, scheduler, ReAct agent, broadcast function.
 
 ---
 
 ## Configuration
 
-Settings and API keys can be configured directly from the UI settings panel. 
-Alternatively, use the `.env` file for backend configurations (see `.env.example`).
+Settings can be configured via:
+1. **UI Settings Panel** — API keys, voice engine, theme
+2. **`.env` file** — backend secrets (see `.env.example`)
+3. **Environment variables** — `GROQ_API_KEY`, `TELEGRAM_BOT_TOKEN`, etc.
 
-**Obsidian Integration:**
-To enable Obsidian integration, install the "Local REST API" community plugin in Obsidian, copy your Bearer Token, and paste it alongside the local URL into Pika's Settings panel.
-
-**AI Providers:**
-Groq, Gemini, Mistral, Cerebras, DeepSeek, OpenRouter, Z.ai, Nvidia, Together, Ollama (local). Add `GROQ_API_KEY` etc. in Settings → AI Provider. Key rotation via comma-separated keys.
-
-**Voice Engines:**
+### Voice Engines
 
 | STT | TTS |
 |---|---|
 | `webspeech` (browser, default) | `edge` (`hi-IN-SwaraNeural`, default) |
 | `vosk` (offline, `models/hi`) | `piper` (offline) |
-| `whisper` (`C:\whisper\ggml-tiny.bin` if exists) | `webspeech` / `none` |
+| `whisper` (optional, `C:\whisper\ggml-tiny.bin`) | `webspeech` / `none` |
+
+### AI Providers
+
+Groq, Gemini, Mistral, Cerebras, DeepSeek, OpenRouter, Z.ai, Nvidia, Together, Ollama (local). Supports comma-separated key rotation for rate limit handling.
 
 ---
 
@@ -529,25 +552,43 @@ Groq, Gemini, Mistral, Cerebras, DeepSeek, OpenRouter, Z.ai, Nvidia, Together, O
 
 | Issue | Fix |
 |---|---|
-| `python not recognized` | Reinstall Python with "Add to PATH" ticked |
-| `ws://8765` not connected | `python pc_bridge.py` running? Firewall allow? |
-| Vosk not loaded | `pip install vosk` + model in `models/hi` |
-| Edge TTS silent | Check internet; fallback `pyttsx3` / `pip install edge-tts` |
+| `python not recognized` | Reinstall Python with "Add to PATH" |
+| `ws://8765` not connected | Run `python pc_bridge.py`; check firewall |
+| Vosk not loaded | `pip install vosk` + model in `models/hi/` |
+| Edge TTS silent | Check internet; fallback to piper |
 | `npm run build` fails | `npm install` again; Node 18+ required |
+| Volume set not working | `pip install pycaw` for exact volume control |
+| PiP not staying on top | Run as admin for `SetWindowPos` permission |
 
 ---
 
-## Docs & Brain
+## Project Structure
 
-- `docs/00-START-HERE.md` → `25-PACKAGING...` — full course (requirements, viva, debugging)
-- `brain.md` — Long-term memory: STT/TTS journey (Parakeet → Whisper tiny 75 MB, Silero → Edge TTS), agent-mini (~3000 lines), regex routing cleanup
+```
+pika-ai-assistant-prompt/
+├── electron/                # main.cjs, preload.cjs
+├── src/
+│   ├── components/          # 65+ React components
+│   ├── hooks/               # useAssistant, useVoice, useWeather, useRealPiP
+│   ├── store/               # assistantStore.ts (zustand)
+│   ├── lib/                 # commandEngine.ts, constants.ts, utils.ts
+│   └── types/               # TypeScript interfaces
+├── pc_bridge.py             # 5700+ line Python WebSocket backend
+├── test_pc_bridge.py        # 70 pytest tests
+├── brain.md                 # Project memory/history
+├── pika_data.json           # Encrypted vault (DPAPI)
+├── calendar_mcp_stub.py     # Calendar sidecar
+├── start.bat                # 1-click launcher
+├── requirements.txt         # Python dependencies
+└── docs/                    # Documentation
+```
 
 ---
 
 ## Contributing
 
-PRs welcome. Keep changes additive. Run `npm run lint` + `npm run build` before pushing.
+PRs welcome. Keep changes additive — no existing behavior deleted. Run `npm run lint` + `npm run build` + `python -m pytest test_pc_bridge.py -v` before pushing.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE).

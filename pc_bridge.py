@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 try:
     import calendar_mcp_stub  # additive calendar sidecar (bina hataye)
 except Exception:
@@ -246,6 +247,19 @@ VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.z
 VOSK_MODEL_DIR = Path(__file__).parent / "models" / "hi"
 DEFAULT_TTS_VOICE = "hi-IN-SwaraNeural"
 connected_clients: set = set()
+
+async def broadcast(message: str):
+    """Send a message to ALL connected WebSocket clients."""
+    if not connected_clients:
+        return
+    dead = []
+    for ws in list(connected_clients):
+        try:
+            await ws.send(message)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        connected_clients.discard(ws)
 
 _vosk_model = None
 
@@ -562,12 +576,34 @@ def ps_async(cmd: str, callback=None):
     _ensure_ps_thread()
     _ps_queue.put((cmd, callback))
 
-def screen_peeler(x: int=0, y: int=0, w: int=0, h: int=0, do_ocr: bool=False) -> dict:
-    """Direct screenshot + optional OCR — region or full screen, saved to Pictures."""
+def screen_peeler(x: int=0, y: int=0, w: int=0, h: int=0, do_ocr: bool=False, all_monitors: bool=False) -> dict:
+    """Direct screenshot + optional OCR — region, full screen, or all monitors merged."""
     try:
-        from PIL import ImageGrab
+        from PIL import ImageGrab, Image
         import io
-        if w and h:
+        if all_monitors:
+            # Capture all monitors and merge into one image
+            try:
+                monitors = get_monitors_list()
+                if len(monitors) > 1:
+                    # Calculate bounding box for all monitors
+                    min_x = min(m["x"] for m in monitors)
+                    min_y = min(m["y"] for m in monitors)
+                    max_x = max(m["x"] + m["width"] for m in monitors)
+                    max_y = max(m["y"] + m["height"] for m in monitors)
+                    # Create merged image
+                    merged = Image.new("RGB", (max_x - min_x, max_y - min_y), (0, 0, 0))
+                    for m in monitors:
+                        try:
+                            img = ImageGrab.grab(bbox=(m["x"], m["y"], m["x"] + m["width"], m["y"] + m["height"]))
+                            merged.paste(img, (m["x"] - min_x, m["y"] - min_y))
+                        except: pass
+                    img = merged
+                else:
+                    img = ImageGrab.grab()
+            except:
+                img = ImageGrab.grab()
+        elif w and h:
             img = ImageGrab.grab(bbox=(x, y, x+w, y+h))
         else:
             img = ImageGrab.grab()
@@ -848,67 +884,147 @@ def cmd_system(action, params):
             try:
                 if IS_WIN:
                     if tgt == "wifi":
-                        # Try netsh toggle — works without admin for query, admin for set; fallback to settings
-                        iface = "Wi-Fi"
+                        # Smart WiFi toggle — netsh with auto-detect interface, fallback to PowerShell radio
+                        iface = None
                         try:
-                            # Find actual Wi-Fi interface name
-                            r = run(["netsh", "interface", "show", "interface"])
-                            out = (r.stdout or "") + (r.stderr or "")
-                            for line in out.splitlines():
-                                if "Wi-Fi" in line or "Wireless" in line:
+                            # Auto-detect Wi-Fi interface name
+                            r = run(["netsh", "interface", "show", "interface"], timeout=5)
+                            for line in (r.stdout or "").splitlines():
+                                low = line.lower()
+                                if "wi-fi" in low or "wireless" in low or "wlan" in low:
                                     parts = line.split()
                                     for p in parts:
-                                        if "Wi-Fi" in p or "Wireless" in p:
-                                            iface = p.strip()
-                                            break
-                        except Exception:
-                            pass
-                        # Try toggle
+                                        if any(k in p.lower() for k in ("wi-fi","wireless","wlan")):
+                                            iface = p.strip(); break
+                                    if iface: break
+                        except: pass
+                        if not iface: iface = "Wi-Fi"
                         try:
                             if act in ("on","enable"):
-                                run(["netsh", "interface", "set", "interface", iface, "admin=enable"])
-                                return ok(f"WiFi ON किया — {iface} ✅")
+                                r = run(["netsh", "interface", "set", "interface", iface, "admin=enable"], timeout=8)
+                                if r.returncode == 0:
+                                    return ok(f"WiFi ON ✅ — {iface}")
+                                # fallback PowerShell radio
+                                r2 = run(["powershell","-NoProfile","-Command","Enable-NetAdapter -Name '"+iface+"' -Confirm:$false"], timeout=8)
+                                if r2.returncode == 0:
+                                    return ok(f"WiFi ON ✅ — {iface} (PowerShell)")
                             elif act in ("off","disable"):
-                                run(["netsh", "interface", "set", "interface", iface, "admin=disable"])
-                                return ok(f"WiFi OFF किया — {iface} ❌")
+                                r = run(["netsh", "interface", "set", "interface", iface, "admin=disable"], timeout=8)
+                                if r.returncode == 0:
+                                    return ok(f"WiFi OFF ❌ — {iface}")
+                                r2 = run(["powershell","-NoProfile","-Command","Disable-NetAdapter -Name '"+iface+"' -Confirm:$false"], timeout=8)
+                                if r2.returncode == 0:
+                                    return ok(f"WiFi OFF ❌ — {iface} (PowerShell)")
                             else:
-                                # toggle: try disable then enable check
-                                r = run(["netsh", "interface", "show", "interface", iface])
+                                # toggle: check status first
+                                r = run(["netsh", "interface", "show", "interface", iface], timeout=5)
                                 is_up = "Enabled" in (r.stdout or "") or "Connected" in (r.stdout or "")
                                 if is_up:
-                                    run(["netsh", "interface", "set", "interface", iface, "admin=disable"])
-                                    return ok(f"WiFi toggle OFF — {iface} ❌ (manual click bhi kar sakte ho)")
+                                    run(["netsh", "interface", "set", "interface", iface, "admin=disable"], timeout=8)
+                                    return ok(f"WiFi OFF ❌ — {iface}")
                                 else:
-                                    run(["netsh", "interface", "set", "interface", iface, "admin=enable"])
-                                    return ok(f"WiFi toggle ON — {iface} ✅")
+                                    run(["netsh", "interface", "set", "interface", iface, "admin=enable"], timeout=8)
+                                    return ok(f"WiFi ON ✅ — {iface}")
                         except Exception as ex:
-                            logger.warning(f"WiFi netsh failed {ex}, opening settings")
+                            logger.warning(f"WiFi netsh failed: {ex}")
+                            # Last resort: open settings
+                            os.startfile("ms-settings:network-wifi")
+                            return ok(f"WiFi toggle failed — Settings khola for manual toggle ⚠️")
                     elif tgt == "bluetooth":
-                        # Try PowerShell PnpDevice toggle, fallback to settings + UIA click
+                        # PowerShell PnpDevice enable/disable — actual hardware toggle
                         try:
-                            if act == "on":
-                                run(["powershell","-NoProfile","-Command","Get-PnpDevice -Class Bluetooth | Where-Object {$_.Status -ne 'OK'} | ForEach-Object { Enable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"])
-                                return ok("Bluetooth ON किया ✅ (settings me bhi toggle kar sakte ho)")
-                            elif act == "off":
-                                run(["powershell","-NoProfile","-Command","Get-PnpDevice -Class Bluetooth | Where-Object {$_.Status -eq 'OK'} | ForEach-Object { Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"])
-                                return ok("Bluetooth OFF किया ❌")
+                            if act in ("on","enable"):
+                                r = run(["powershell","-NoProfile","-Command",
+                                    "Get-PnpDevice -Class Bluetooth -Status OK | ForEach-Object { $_.FriendlyName + ':ON' }; "
+                                    "Get-PnpDevice -Class Bluetooth -Status Error | ForEach-Object { Enable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"],
+                                    timeout=10)
+                                return ok(f"Bluetooth ON ✅ — {(r.stdout or '').strip()[:100]}")
+                            elif act in ("off","disable"):
+                                r = run(["powershell","-NoProfile","-Command",
+                                    "Get-PnpDevice -Class Bluetooth -Status OK | ForEach-Object { Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"],
+                                    timeout=10)
+                                return ok(f"Bluetooth OFF ❌ — {(r.stdout or '').strip()[:100]}")
                             else:
-                                # toggle: open settings and try UIA click
-                                os.startfile("ms-settings:bluetooth")
-                                time.sleep(0.9)
-                                if pyautogui:
-                                    try:
-                                        # Try click near toggle (center of window) — manual fallback
-                                        pyautogui.click(900, 350)
-                                    except Exception:
-                                        pass
-                                return ok("Bluetooth toggle — Settings khola, toggle pe click karo (manual bhi) ✅")
+                                # toggle: check current state
+                                r = run(["powershell","-NoProfile","-Command",
+                                    "Get-PnpDevice -Class Bluetooth | Select-Object Status,FriendlyName | Format-Table -AutoSize"],
+                                    timeout=8)
+                                out = (r.stdout or "")
+                                has_on = "OK" in out
+                                if has_on:
+                                    run(["powershell","-NoProfile","-Command",
+                                        "Get-PnpDevice -Class Bluetooth -Status OK | ForEach-Object { Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"],
+                                        timeout=10)
+                                    return ok("Bluetooth OFF ❌ (hardware toggle)")
+                                else:
+                                    run(["powershell","-NoProfile","-Command",
+                                        "Get-PnpDevice -Class Bluetooth | ForEach-Object { Enable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"],
+                                        timeout=10)
+                                    return ok("Bluetooth ON ✅ (hardware toggle)")
                         except Exception as ex:
-                            logger.warning(f"BT toggle failed {ex}")
+                            logger.warning(f"BT PnpDevice failed: {ex}")
+                            os.startfile("ms-settings:bluetooth")
+                            return ok("Bluetooth toggle failed — Settings khola ⚠️")
                     elif tgt == "airplane":
-                        os.startfile("ms-settings:network-airplanemode")
-                        return ok("Airplane Mode Settings khola ✈️ — toggle pe click karo")
-                # Fallback open settings
+                        # True airplane mode — disable ALL radios: WiFi + Bluetooth + Cellular
+                        try:
+                            if act in ("on","enable"):
+                                # Disable network adapters
+                                r = run(["powershell","-NoProfile","-Command",
+                                    "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object { "
+                                    "Disable-NetAdapter -Name $_.Name -Confirm:$false }; "
+                                    "Set-NetAdapterAdvancedProperty -Name '*' -RegistryKeyword 'RadioType' -RegistryValue 0 -ErrorAction SilentlyContinue"],
+                                    timeout=12)
+                                # Disable Bluetooth
+                                try:
+                                    run(["powershell","-NoProfile","-Command",
+                                        "Get-PnpDevice -Class Bluetooth | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue"],
+                                        timeout=8)
+                                except: pass
+                                return ok("Airplane Mode ON ✈️ — WiFi + Bluetooth + all radios disabled")
+                            elif act in ("off","disable"):
+                                # Enable network adapters
+                                r = run(["powershell","-NoProfile","-Command",
+                                    "Get-NetAdapter | ForEach-Object { Enable-NetAdapter -Name $_.Name -Confirm:$false }"],
+                                    timeout=12)
+                                # Enable Bluetooth
+                                try:
+                                    run(["powershell","-NoProfile","-Command",
+                                        "Get-PnpDevice -Class Bluetooth | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue"],
+                                        timeout=8)
+                                except: pass
+                                return ok("Airplane Mode OFF — WiFi + Bluetooth + all radios enabled 📡")
+                            else:
+                                # toggle: check radio state
+                                r = run(["powershell","-NoProfile","-Command",
+                                    "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Measure-Object | Select-Object -ExpandProperty Count"],
+                                    timeout=5)
+                                active = int((r.stdout or "0").strip() or "0")
+                                if active > 0:
+                                    run(["powershell","-NoProfile","-Command",
+                                        "Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object { Disable-NetAdapter -Name $_.Name -Confirm:$false }"],
+                                        timeout=12)
+                                    try:
+                                        run(["powershell","-NoProfile","-Command",
+                                            "Get-PnpDevice -Class Bluetooth | Disable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue"],
+                                            timeout=8)
+                                    except: pass
+                                    return ok(f"Airplane Mode ON ✈️ — {active} adapters + Bluetooth disabled")
+                                else:
+                                    run(["powershell","-NoProfile","-Command",
+                                        "Get-NetAdapter | ForEach-Object { Enable-NetAdapter -Name $_.Name -Confirm:$false }"],
+                                        timeout=12)
+                                    try:
+                                        run(["powershell","-NoProfile","-Command",
+                                            "Get-PnpDevice -Class Bluetooth | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue"],
+                                            timeout=8)
+                                    except: pass
+                                    return ok("Airplane Mode OFF — WiFi + Bluetooth + all radios enabled 📡")
+                        except Exception as ex:
+                            logger.warning(f"Airplane mode failed: {ex}")
+                            os.startfile("ms-settings:network-airplanemode")
+                            return ok("Airplane mode failed — Settings khola ⚠️")
+                # Linux/macOS fallback
                 mp = {"bluetooth":"ms-settings:bluetooth","wifi":"ms-settings:network-wifi","airplane":"ms-settings:network-airplanemode"}[tgt]
                 os.startfile(mp)
                 return ok(f"{tgt.title()} Settings khola — manual toggle kar sakte ho")
@@ -919,6 +1035,63 @@ def cmd_system(action, params):
         return err(str(e))
 
 
+def _get_current_volume() -> int:
+    """Get current system volume % via pycaw/Windows CoreAudio (0-100)."""
+    # Method 1: pycaw (most reliable on Windows)
+    try:
+        from pycaw.pycaw import AudioUtilities
+        from ctypes import cast, POINTER
+        from comtypes import CLSCTX_ALL
+        from pycaw.constants import IAudioEndpointVolume
+        speakers = AudioUtilities.GetSpeakers()
+        iface = speakers.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = cast(iface, POINTER(IAudioEndpointVolume))
+        cur = volume.GetMasterVolumeLevelScalar()
+        return int(round(cur * 100))
+    except: pass
+    # Method 2: PowerShell AudioDevice module (if installed)
+    try:
+        r = run(["powershell","-NoProfile","-Command",
+            "Get-AudioDevice -PlaybackVolume -ErrorAction SilentlyContinue"], timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return int(float(r.stdout.strip()))
+    except: pass
+    # Method 3: nircmd fallback
+    try:
+        r = run(["nircmd","mediavolume","get"], timeout=3)
+        if r.returncode == 0:
+            return int(float(r.stdout.strip()))
+    except: pass
+    return -1
+
+def _set_volume_exact(percent: int) -> bool:
+    """Set exact volume % via pycaw/Windows CoreAudio (most reliable)."""
+    percent = max(0, min(100, percent))
+    # Method 1: pycaw (direct Windows CoreAudio API — always works on Windows)
+    try:
+        from pycaw.pycaw import AudioUtilities
+        from ctypes import cast, POINTER
+        from comtypes import CLSCTX_ALL
+        from pycaw.constants import IAudioEndpointVolume
+        speakers = AudioUtilities.GetSpeakers()
+        iface = speakers.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        volume = cast(iface, POINTER(IAudioEndpointVolume))
+        volume.SetMasterVolumeLevelScalar(percent / 100.0, None)
+        return True
+    except: pass
+    # Method 2: PowerShell AudioDevice module (if installed)
+    try:
+        r = run(["powershell","-NoProfile","-Command",
+            f"Set-AudioDevice -PlaybackVolume {percent} -ErrorAction SilentlyContinue"], timeout=5)
+        if r.returncode == 0: return True
+    except: pass
+    # Method 3: nircmd (if installed)
+    try:
+        r = run(["nircmd","mediavolume",str(int(percent * 655.35))], timeout=3)
+        if r.returncode == 0: return True
+    except: pass
+    return False
+
 def cmd_volume(action, params):
     if not pyautogui:
         return err("pyautogui ज़रूरी है")
@@ -927,21 +1100,38 @@ def cmd_volume(action, params):
             steps = max(1, params.get("amount", 10) // 2)
             for _ in range(steps):
                 pyautogui.press("volumeup")
-            return ok("आवाज़ बढ़ा दी। 🔊")
+            cur = _get_current_volume()
+            return ok(f"आवाज़ बढ़ा दी 🔊 ({cur}%)" if cur >= 0 else "आवाज़ बढ़ा दी। 🔊")
         if action == "down":
             steps = max(1, params.get("amount", 10) // 2)
             for _ in range(steps):
                 pyautogui.press("volumedown")
-            return ok("आवाज़ कम कर दी। 🔉")
+            cur = _get_current_volume()
+            return ok(f"आवाज़ कम कर दी 🔉 ({cur}%)" if cur >= 0 else "आवाज़ कम कर दी। 🔉")
         if action in ("mute", "unmute"):
             pyautogui.press("volumemute")
             return ok("म्यूट टॉगल किया। 🔇")
         if action == "set":
             level = max(0, min(100, int(params.get("percent", params.get("level", 50)))))
-            for _ in range(50):
-                pyautogui.press("volumedown")
-            for _ in range(level // 2):
-                pyautogui.press("volumeup")
+            # Try exact set first
+            if _set_volume_exact(level):
+                return ok(f"आवाज़ {level}% पर सेट (exact) 🔊")
+            # Fallback: key press method
+            cur = _get_current_volume()
+            if cur >= 0:
+                diff = level - cur
+                if diff > 0:
+                    for _ in range(diff // 2 + 1):
+                        pyautogui.press("volumeup")
+                elif diff < 0:
+                    for _ in range(abs(diff) // 2 + 1):
+                        pyautogui.press("volumedown")
+            else:
+                # Worst case: reset to 0 then climb
+                for _ in range(50):
+                    pyautogui.press("volumedown")
+                for _ in range(level // 2):
+                    pyautogui.press("volumeup")
             return ok(f"आवाज़ {level}% पर सेट। 🔊")
         return err(f"अज्ञात volume action: {action}")
     except Exception as e:
@@ -1235,6 +1425,60 @@ def cmd_files(action, params):
                 return err("सोर्स फाइल नहीं मिली।")
             src.rename(dst)
             return ok(f"रीनेम: {src.name} → {dst.name}")
+        if action == "search":
+            # Glob pattern search — add pattern matching
+            pattern = params.get("pattern", "*")
+            search_path = resolve_path(params.get("path", ""))
+            if not search_path.exists():
+                return err("पथ नहीं मिला।")
+            try:
+                matches = []
+                for p in search_path.glob(pattern):
+                    if len(matches) >= 50: break
+                    try:
+                        sz = p.stat().st_size if p.is_file() else 0
+                        matches.append({"name": p.name, "path": str(p), "is_dir": p.is_dir(), "size": sz})
+                    except: pass
+                return ok(f"{len(matches)} मिले ({pattern})", {"matches": matches, "pattern": pattern})
+            except Exception as ex:
+                return err(f"Search error: {ex}")
+        if action == "copy":
+            src = resolve_path(params.get("path", ""))
+            dst = resolve_path(params.get("dest", ""))
+            if not is_path_safe(src) or not is_path_safe(dst):
+                return err("सुरक्षा: पथ प्रतिबंधित है।")
+            if not src.exists():
+                return err("सोर्स फाइल नहीं मिली।")
+            if src.is_dir():
+                shutil.copytree(str(src), str(dst))
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst))
+            return ok(f"कॉपी: {src.name} → {dst}")
+        if action == "move":
+            src = resolve_path(params.get("path", ""))
+            dst = resolve_path(params.get("dest", ""))
+            if not is_path_safe(src) or not is_path_safe(dst):
+                return err("सुरक्षा: पथ प्रतिबंधित है।")
+            if not src.exists():
+                return err("सोर्स फाइल नहीं मिली।")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            return ok(f"मूव: {src.name} → {dst}")
+        if action == "write_atomic":
+            # Atomic write — temp file then rename (crash-safe)
+            p = resolve_path(params.get("path", ""))
+            if not is_path_safe(p):
+                return err("सुरक्षा: यह पथ प्रतिबंधित है।")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            try:
+                tmp.write_text(params.get("content", ""), encoding="utf-8")
+                tmp.replace(p)  # atomic on same filesystem
+                return ok(f"Atomic save: {p}")
+            except Exception as ex:
+                if tmp.exists(): tmp.unlink()
+                return err(f"Atomic write failed: {ex}")
         return err(f"अज्ञात files action: {action}")
     except Exception as e:
         return err(str(e))
@@ -1382,6 +1626,109 @@ def cmd_uia(action, params):
         if action == "get_monitors":
             mons = get_monitors()
             return ok(f"{len(mons)} monitor मिले", {"monitors": mons})
+        if action == "deep_tree":
+            # Deep Windows UIA Element Tree — Microsoft UFO2 style
+            if IS_WIN:
+                try:
+                    # Use PowerShell to walk the full UIA tree with element details
+                    app_name = str(params.get("app", "") or params.get("name", "")).strip()
+                    depth = int(params.get("depth", 3))
+                    ps_script = f'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+function Get-UIATree($element, $depth) {{
+    if ($depth -le 0) {{ return @() }}
+    $children = @()
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    $child = $walker.GetFirstChild($element)
+    while ($child -ne $null) {{
+        $info = @{{
+            Name = $child.Current.Name
+            ControlType = $child.Current.ControlType.ProgrammaticName
+            AutomationId = $child.Current.AutomationId
+            ClassName = $child.Current.ClassName
+            BoundingBox = $child.Current.BoundingRectangle.ToString()
+            IsEnabled = $child.Current.IsEnabled
+        }}
+        $children += $info
+        $children += Get-UIATree $child ($depth - 1)
+        $child = $walker.GetNextSibling($child)
+    }}
+    return $children
+}}
+$elements = Get-UIATree $root {depth}
+$elements | ConvertTo-Json -Depth 3
+'''
+                    r = run(["powershell","-NoProfile","-Command", ps_script], timeout=15)
+                    if r.returncode == 0 and r.stdout.strip():
+                        import json as _j
+                        elements = _j.loads(r.stdout)
+                        if isinstance(elements, dict):
+                            elements = [elements]
+                        # Filter by app name if provided
+                        if app_name:
+                            elements = [e for e in elements if app_name.lower() in (e.get("Name","").lower() + e.get("ClassName","").lower() + e.get("AutomationId","").lower())]
+                        return ok(f"UIA Tree: {len(elements)} elements", {"elements": elements[:100], "total": len(elements)})
+                    return ok("UIA Tree empty — try different app", {"elements": []})
+                except Exception as ex:
+                    return err(f"deep_tree: {ex}")
+            return err("deep_tree Windows पर ही काम करता है")
+        if action == "uia_click_by_id":
+            # Click by UIA AutomationId — most reliable method
+            if IS_WIN:
+                auto_id = str(params.get("automation_id", "") or params.get("id", "")).strip()
+                if not auto_id:
+                    return err("automation_id चाहिए")
+                try:
+                    ps_script = f'''
+Add-Type -AssemblyName UIAutomationClient
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$condition = New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::AutomationIdProperty, "{auto_id}")
+$element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+if ($element -ne $null) {{
+    $invokePattern = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $invokePattern.Invoke()
+    Write-Output "clicked"
+}} else {{
+    Write-Output "not_found"
+}}
+'''
+                    r = run(["powershell","-NoProfile","-Command", ps_script], timeout=5)
+                    if "clicked" in (r.stdout or ""):
+                        return ok(f"UIA click by ID '{auto_id}' ✅")
+                    return err(f"Element with AutomationId '{auto_id}' not found")
+                except Exception as ex:
+                    return err(f"uia_click_by_id: {ex}")
+            return err("uia_click_by_id Windows पर ही काम करता है")
+        if action == "uia_set_value":
+            # Set value on a UIA textbox/control
+            if IS_WIN:
+                auto_id = str(params.get("automation_id", "") or params.get("id", "")).strip()
+                value = str(params.get("value", "")).strip()
+                if not auto_id or not value:
+                    return err("automation_id और value दोनों चाहिए")
+                try:
+                    ps_script = f'''
+Add-Type -AssemblyName UIAutomationClient
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$condition = New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::AutomationIdProperty, "{auto_id}")
+$element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+if ($element -ne $null) {{
+    $valuePattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $valuePattern.SetValue("{value}")
+    Write-Output "set"
+}} else {{
+    Write-Output "not_found"
+}}
+'''
+                    r = run(["powershell","-NoProfile","-Command", ps_script], timeout=5)
+                    if "set" in (r.stdout or ""):
+                        return ok(f"UIA set value on '{auto_id}' ✅")
+                    return err(f"Element with AutomationId '{auto_id}' not found")
+                except Exception as ex:
+                    return err(f"uia_set_value: {ex}")
+            return err("uia_set_value Windows पर ही काम करता है")
         if action == "find_text":
             # OCR click: find Hindi/English text on screen via pytesseract → click
             try:
@@ -1440,58 +1787,377 @@ def cmd_uia(action, params):
         return err(str(e))
 
 def cmd_browser(action, params):
-    """Headless Browser Routing + Ad-Free YouTube — additive."""
+    """Full Browser DOM Automation — Playwright-powered click/fill/extract/navigate."""
     try:
         url = params.get("url","") or params.get("query","")
         if action in ("open","navigate","goto"):
             if not url: return err("URL खाली है")
             if not url.startswith("http"): url = "https://" + url
             browser = get_default_browser()
-            # Ad-Free YouTube resolver if query looks like YouTube search
+            # Ad-Free YouTube resolver
             if "youtube" in url.lower() or "youtu" in url.lower() or params.get("query","").lower().startswith("play "):
                 q = params.get("query", url)
                 url = resolve_youtube_adfree(q)
-            # Webbrowser open via default browser
             webbrowser.open(url)
-            # Headless Chromium scrape for title (optional)
+            # Headless Chromium with full page info
             try:
-                from playwright.sync_api import sync_playwright  # type: ignore
+                from playwright.sync_api import sync_playwright
                 with sync_playwright() as p:
-                    b = p.chromium.launch(headless=True)
-                    pg = b.new_page()
-                    pg.goto(url, timeout=8000)
+                    b = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                    ctx = b.new_context(viewport={"width": 1280, "height": 720}, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    pg = ctx.new_page()
+                    pg.goto(url, timeout=15000, wait_until="domcontentloaded")
                     title = pg.title()
+                    try:
+                        text = pg.inner_text("body")[:500]
+                    except:
+                        text = ""
                     b.close()
-                    return ok(f"Browser {browser}: {title} 🌐", {"url": url, "browser": browser, "title": title})
-            except Exception:
-                return ok(f"Browser {browser}: {url} 🌐", {"url": url, "browser": browser})
+                    return ok(f"Browser {browser}: {title} 🌐", {"url": url, "browser": browser, "title": title, "preview": text[:300]})
+            except Exception as ex:
+                logger.warning(f"Playwright failed: {ex}")
+                return ok(f"Browser {browser}: {url} 🌐 (headless failed, opened in default browser)", {"url": url, "browser": browser})
+        
+        # ─── DOM Automation Actions (Playwright required) ───
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return err("Playwright install करें: pip install playwright && playwright install chromium")
+        
+        target_url = params.get("target_url", url)
+        selector = params.get("selector", "") or params.get("css", "")
+        value = params.get("value", "") or params.get("text", "")
+        
+        with sync_playwright() as p:
+            b = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            ctx = b.new_context(viewport={"width": 1280, "height": 720}, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            pg = ctx.new_page()
+            
+            # Navigate if URL provided
+            if target_url:
+                if not target_url.startswith("http"): target_url = "https://" + target_url
+                pg.goto(target_url, timeout=15000, wait_until="domcontentloaded")
+            
+            if action == "click":
+                # Click element by CSS selector
+                if not selector: return err("selector चाहिए (css selector)")
+                try:
+                    pg.wait_for_selector(selector, timeout=5000)
+                    pg.click(selector)
+                    title = pg.title()
+                    return ok(f"Clicked: {selector} 🖱️", {"selector": selector, "title": title})
+                except Exception as ex:
+                    return err(f"Click failed: {ex}")
+            
+            elif action == "fill":
+                # Fill input field
+                if not selector: return err("selector चाहिए")
+                if not value: return err("value चाहिए")
+                try:
+                    pg.wait_for_selector(selector, timeout=5000)
+                    pg.fill(selector, value)
+                    return ok(f"Filled: {selector} = {value[:30]} ✏️", {"selector": selector, "value": value[:50]})
+                except Exception as ex:
+                    return err(f"Fill failed: {ex}")
+            
+            elif action == "type":
+                # Type text (keyboard input)
+                if not selector: return err("selector चाहिए")
+                if not value: return err("text चाहिए")
+                try:
+                    pg.wait_for_selector(selector, timeout=5000)
+                    pg.type(selector, value, delay=50)
+                    return ok(f"Typed: {selector} ⌨️", {"selector": selector})
+                except Exception as ex:
+                    return err(f"Type failed: {ex}")
+            
+            elif action in ("extract", "get_text"):
+                # Extract text from element or full page
+                if selector:
+                    try:
+                        pg.wait_for_selector(selector, timeout=5000)
+                        text = pg.inner_text(selector)[:5000]
+                        return ok(f"Extracted from {selector} 📄", {"text": text, "selector": selector})
+                    except Exception as ex:
+                        return err(f"Extract failed: {ex}")
+                else:
+                    text = pg.inner_text("body")[:5000]
+                    title = pg.title()
+                    return ok(f"Page text: {title} 📄", {"text": text, "title": title})
+            
+            elif action == "get_html":
+                # Get HTML of element or full page
+                if selector:
+                    try:
+                        html = pg.inner_html(selector)[:10000]
+                        return ok(f"HTML from {selector} 🌐", {"html": html, "selector": selector})
+                    except Exception as ex:
+                        return err(f"HTML extract failed: {ex}")
+                else:
+                    html = pg.content()[:10000]
+                    title = pg.title()
+                    return ok(f"Full HTML: {title} 🌐", {"html": html, "title": title})
+            
+            elif action == "get_links":
+                # Extract all links from page
+                try:
+                    links = pg.eval_on_selector_all("a[href]", "els => els.map(e => ({text: e.innerText.trim(), href: e.href}))")
+                    return ok(f"{len(links)} links found 🔗", {"links": links[:50]})
+                except Exception as ex:
+                    return err(f"Link extract failed: {ex}")
+            
+            elif action == "get_forms":
+                # Extract form fields
+                try:
+                    forms = pg.eval_on_selector_all("form", """els => els.map(f => ({
+                        action: f.action, method: f.method,
+                        fields: Array.from(f.querySelectorAll('input,textarea,select')).map(i => ({
+                            name: i.name, type: i.type, placeholder: i.placeholder, value: i.value
+                        }))
+                    }))""")
+                    return ok(f"{len(forms)} forms found 📋", {"forms": forms})
+                except Exception as ex:
+                    return err(f"Form extract failed: {ex}")
+            
+            elif action == "fill_form":
+                # Fill multiple form fields at once
+                fields = params.get("fields", {})  # {selector: value}
+                if not fields: return err("fields dict चाहिए {selector: value}")
+                filled = []
+                for sel, val in fields.items():
+                    try:
+                        pg.wait_for_selector(sel, timeout=3000)
+                        pg.fill(sel, str(val))
+                        filled.append(sel)
+                    except: pass
+                return ok(f"Filled {len(filled)}/{len(fields)} fields 📋", {"filled": filled})
+            
+            elif action == "select":
+                # Select dropdown option
+                if not selector: return err("selector चाहिए")
+                if not value: return err("value चाहिए")
+                try:
+                    pg.select_option(selector, value)
+                    return ok(f"Selected: {selector} = {value} 📋", {"selector": selector, "value": value})
+                except Exception as ex:
+                    return err(f"Select failed: {ex}")
+            
+            elif action == "check":
+                # Check/uncheck checkbox
+                if not selector: return err("selector चाहिए")
+                try:
+                    pg.check(selector)
+                    return ok(f"Checked: {selector} ☑️", {"selector": selector})
+                except Exception as ex:
+                    return err(f"Check failed: {ex}")
+            
+            elif action == "wait":
+                # Wait for selector to appear
+                if not selector: return err("selector चाहिए")
+                try:
+                    timeout = int(params.get("timeout", 5000))
+                    pg.wait_for_selector(selector, timeout=timeout)
+                    return ok(f"Element appeared: {selector} ⏳", {"selector": selector})
+                except Exception as ex:
+                    return err(f"Wait timeout: {ex}")
+            
+            elif action == "screenshot":
+                # Take screenshot of page
+                try:
+                    pics = Path.home() / "Pictures" / "Pika_Screenshots"
+                    pics.mkdir(parents=True, exist_ok=True)
+                    fp = pics / f"browser_{datetime.now():%Y%m%d_%H%M%S}.png"
+                    pg.screenshot(path=str(fp), full_page=False)
+                    return ok(f"Screenshot saved 📸", {"path": str(fp)})
+                except Exception as ex:
+                    return err(f"Screenshot failed: {ex}")
+            
+            elif action == "scroll":
+                # Scroll page
+                direction = value or "down"
+                try:
+                    if direction == "down":
+                        pg.evaluate("window.scrollBy(0, window.innerHeight)")
+                    elif direction == "up":
+                        pg.evaluate("window.scrollBy(0, -window.innerHeight)")
+                    elif direction == "top":
+                        pg.evaluate("window.scrollTo(0, 0)")
+                    elif direction == "bottom":
+                        pg.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    return ok(f"Scrolled {direction} 📜", {"direction": direction})
+                except Exception as ex:
+                    return err(f"Scroll failed: {ex}")
+            
+            elif action == "eval":
+                # Execute JavaScript
+                if not value: return err("JavaScript code चाहिए")
+                try:
+                    result = pg.evaluate(value)
+                    return ok(f"JS executed 💻", {"result": str(result)[:2000]})
+                except Exception as ex:
+                    return err(f"JS error: {ex}")
+            
+            elif action == "back":
+                pg.go_back()
+                return ok("Back 🔄")
+            
+            elif action == "forward":
+                pg.go_forward()
+                return ok("Forward 🔄")
+            
+            elif action == "reload":
+                pg.reload()
+                return ok("Reloaded 🔄")
+            
+            b.close()
+        
         if action == "screenshot":
-            # Reuse screen screenshot for now
             return cmd_screen("screenshot", {})
         if action == "fill":
-            # Dispatch via keyboard type as fallback
             return cmd_keyboard("type", {"text": params.get("text","")})
         return err(f"अज्ञात browser action: {action}")
     except Exception as e:
         return err(str(e))
 
 def cmd_connectors(action, params):
-    """OAuth connectors skeleton — additive, no external call yet. Stores state in vault."""
+    """Real OAuth connectors — Google Calendar/Gmail/Drive with token persistence."""
     try:
         cid = (params.get("id") or params.get("connector") or "").lower()
-        valid = {"gmail","calendar","slack","notion","github","drive"}
+        valid = {"gmail","calendar","drive","slack","notion","github"}
         if action == "list":
             data = load_vault_data() or {}
             conns = data.get("connectors", {})
-            items = [{"id": k, "connected": bool(conns.get(k,{}).get("connected")), "scopes": conns.get(k,{}).get("scopes",[])} for k in valid]
+            items = []
+            for k in valid:
+                conn = conns.get(k, {})
+                items.append({"id": k, "connected": bool(conn.get("connected")), "email": conn.get("email", ""), "scopes": conn.get("scopes",[])})
             return ok(f"{sum(1 for i in items if i['connected'])} connectors connected", {"items": items})
         if action == "connect":
             if cid not in valid: return err(f"Unknown connector {cid}")
+            if cid in ("gmail", "calendar", "drive"):
+                # Real Google OAuth2 flow
+                client_id = params.get("client_id", "") or os.getenv("GOOGLE_CLIENT_ID", "")
+                client_secret = params.get("client_secret", "") or os.getenv("GOOGLE_CLIENT_SECRET", "")
+                if not client_id or not client_secret:
+                    return err("Google OAuth client_id और client_secret चाहिए। Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env or params.")
+                # Determine scopes based on connector
+                scope_map = {
+                    "gmail": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
+                    "calendar": "https://www.googleapis.com/auth/calendar",
+                    "drive": "https://www.googleapis.com/auth/drive",
+                }
+                scopes = scope_map.get(cid, "https://www.googleapis.com/auth/gmail.readonly")
+                # Generate auth URL
+                auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}&redirect_uri=http://localhost:8080&response_type=code&scope={scopes}&access_type=offline&prompt=consent"
+                data = load_vault_data() or {}
+                conns = data.setdefault("connectors", {})
+                conns[cid] = {"connected": False, "auth_url": auth_url, "client_id": client_id, "scopes": scopes.split(), "pending": True}
+                save_vault_data(data)
+                return ok(f"Google OAuth — open this URL to authorize:\n{auth_url}", {"auth_url": auth_url, "connector": cid})
+            # Placeholder for non-Google connectors
             data = load_vault_data() or {}
             conns = data.setdefault("connectors", {})
             conns[cid] = {"connected": True, "connected_at": datetime.now(timezone.utc).isoformat(), "scopes": []}
             save_vault_data(data)
-            return ok(f"{cid} connected (OAuth placeholder) — add client_id in .env to enable real flow ✅", {"id": cid})
+            return ok(f"{cid} connected (placeholder) ✅", {"id": cid})
+        if action == "oauth_callback":
+            # Handle OAuth callback with authorization code
+            code = params.get("code", "")
+            cid = params.get("connector", cid)
+            if not code:
+                return err("Authorization code चाहिए")
+            data = load_vault_data() or {}
+            conns = data.get("connectors", {})
+            conn = conns.get(cid, {})
+            client_id = conn.get("client_id", "") or os.getenv("GOOGLE_CLIENT_ID", "")
+            client_secret = conn.get("client_secret", "") or os.getenv("GOOGLE_CLIENT_SECRET", "")
+            if not client_id or not client_secret:
+                return err("OAuth credentials not found")
+            # Exchange code for tokens
+            try:
+                import urllib.request as _req
+                token_data = urllib.parse.urlencode({
+                    "code": code, "client_id": client_id, "client_secret": client_secret,
+                    "redirect_uri": "http://localhost:8080", "grant_type": "authorization_code"
+                }).encode()
+                req = _req.Request("https://oauth2.googleapis.com/token", data=token_data, method="POST")
+                with _req.urlopen(req, timeout=10) as resp:
+                    tokens = json.loads(resp.read().decode())
+                    access_token = tokens.get("access_token", "")
+                    refresh_token = tokens.get("refresh_token", "")
+                    # Get user email
+                    req2 = _req.Request("https://www.googleapis.com/oauth2/v2/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+                    with _req.urlopen(req2, timeout=5) as resp2:
+                        user_info = json.loads(resp2.read().decode())
+                        email = user_info.get("email", "")
+                    # Save tokens
+                    conns[cid] = {"connected": True, "access_token": access_token, "refresh_token": refresh_token, "email": email, "scopes": conn.get("scopes",[]), "expires_at": datetime.now(timezone.utc).isoformat()}
+                    data["connectors"] = conns
+                    save_vault_data(data)
+                    return ok(f"Google {cid} connected! Email: {email} ✅", {"email": email, "connector": cid})
+            except Exception as ex:
+                return err(f"OAuth token exchange failed: {ex}")
+        if action == "gmail_list":
+            # List recent Gmail messages
+            data = load_vault_data() or {}
+            conn = data.get("connectors", {}).get("gmail", {})
+            if not conn.get("connected"):
+                return err("Gmail not connected — use connectors/connect first")
+            access_token = conn.get("access_token", "")
+            try:
+                import urllib.request as _req
+                req = _req.Request("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10", headers={"Authorization": f"Bearer {access_token}"})
+                with _req.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+                    messages = result.get("messages", [])
+                    items = []
+                    for msg in messages[:10]:
+                        req2 = _req.Request(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}?format=metadata", headers={"Authorization": f"Bearer {access_token}"})
+                        with _req.urlopen(req2, timeout=5) as resp2:
+                            msg_data = json.loads(resp2.read().decode())
+                            headers_list = {h["name"]: h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
+                            items.append({"id": msg["id"], "from": headers_list.get("From", ""), "subject": headers_list.get("Subject", ""), "snippet": msg_data.get("snippet", "")[:200]})
+                    return ok(f"{len(items)} messages", {"items": items})
+            except Exception as ex:
+                return err(f"Gmail list failed: {ex}")
+        if action == "calendar_list":
+            # List upcoming calendar events
+            data = load_vault_data() or {}
+            conn = data.get("connectors", {}).get("calendar", {})
+            if not conn.get("connected"):
+                return err("Calendar not connected — use connectors/connect first")
+            access_token = conn.get("access_token", "")
+            try:
+                import urllib.request as _req
+                now = datetime.now(timezone.utc).isoformat() + "Z"
+                future = (datetime.now(timezone.utc) + __import__('datetime').timedelta(days=7)).isoformat() + "Z"
+                req = _req.Request(f"https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin={now}&timeMax={future}&singleEvents=true&orderBy=startTime&maxResults=10", headers={"Authorization": f"Bearer {access_token}"})
+                with _req.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+                    events = result.get("items", [])
+                    items = []
+                    for ev in events:
+                        start = ev.get("start", {}).get("dateTime", ev.get("start", {}).get("date", ""))
+                        items.append({"id": ev["id"], "summary": ev.get("summary", ""), "start": start, "location": ev.get("location", ""), "link": ev.get("htmlLink", "")})
+                    return ok(f"{len(items)} events (next 7 days)", {"items": items})
+            except Exception as ex:
+                return err(f"Calendar list failed: {ex}")
+        if action == "drive_list":
+            # List recent Google Drive files
+            data = load_vault_data() or {}
+            conn = data.get("connectors", {}).get("drive", {})
+            if not conn.get("connected"):
+                return err("Drive not connected — use connectors/connect first")
+            access_token = conn.get("access_token", "")
+            try:
+                import urllib.request as _req
+                req = _req.Request("https://www.googleapis.com/drive/v3/files?pageSize=10&fields=files(id,name,mimeType,modifiedTime,webViewLink)", headers={"Authorization": f"Bearer {access_token}"})
+                with _req.urlopen(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+                    files = result.get("files", [])
+                    return ok(f"{len(files)} files", {"items": files})
+            except Exception as ex:
+                return err(f"Drive list failed: {ex}")
         if action == "disconnect":
             data = load_vault_data() or {}
             conns = data.get("connectors", {})
@@ -1508,6 +2174,7 @@ def cmd_connectors(action, params):
 # ── Persistent Scheduler (APScheduler or threading fallback) ──
 _scheduler = None
 _scheduler_jobs: dict = {}
+_fallback_timers: dict = {}  # jid -> threading.Timer for fallback mode
 
 def _ensure_scheduler():
     global _scheduler
@@ -1586,7 +2253,51 @@ def _parse_cmd_action(cmd: str) -> str:
     return "time"
 
 def _parse_cmd_params(cmd: str) -> dict:
-    return {}
+    """Extract params from command string — basic heuristic."""
+    params = {}
+    low = cmd.lower()
+    # Extract app name after "open "
+    if "open" in low:
+        parts = cmd.split("open", 1)
+        if len(parts) > 1:
+            app = parts[1].strip()
+            if app:
+                params["name"] = app
+    # Extract volume level after "volume "
+    if "volume" in low and any(c.isdigit() for c in low):
+        import re as _re
+        nums = _re.findall(r'\d+', cmd)
+        if nums:
+            params["level"] = int(nums[0])
+    return params
+
+def _parse_schedule_to_seconds(schedule: str) -> int:
+    """Parse human schedule string to seconds. Supports: every N minutes/hours, daily at HH:MM."""
+    import re as _re
+    low = schedule.lower().strip()
+    # "every N minutes"
+    m = _re.search(r'every\s+(\d+)\s*min', low)
+    if m: return int(m.group(1)) * 60
+    # "every N hours"
+    m = _re.search(r'every\s+(\d+)\s*hour', low)
+    if m: return int(m.group(1)) * 3600
+    # "hourly" = 1 hour
+    if low in ("hourly", "every hour"): return 3600
+    # "daily at HH:MM"
+    m = _re.search(r'daily\s+at\s+(\d{1,2}):(\d{2})', low)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        now = datetime.now()
+        target = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if target <= now:
+            from datetime import timedelta
+            target += timedelta(days=1)
+        return int((target - now).total_seconds())
+    # "every N seconds"
+    m = _re.search(r'every\s+(\d+)\s*sec', low)
+    if m: return int(m.group(1))
+    # Default: 60 minutes
+    return 3600
 
 def cmd_scheduler(action, params):
     """Persistent scheduler — additive."""
@@ -1610,13 +2321,24 @@ def cmd_scheduler(action, params):
             # Fallback threading timer if APScheduler not available
             if _scheduler is False:
                 import threading as _t
-                def _fallback():
-                    route_command({"category": _parse_cmd_category(command), "action": _parse_cmd_action(command), "params": {}})
-                    _t.Timer(3600, _fallback).start()
-                _t.Timer(60, _fallback).start()
+                delay = _parse_schedule_to_seconds(schedule)
+                def _fallback(jid=jid, command=command, delay=delay):
+                    route_command({"category": _parse_cmd_category(command), "action": _parse_cmd_action(command), "params": _parse_cmd_params(command)})
+                    # Re-arm with same interval
+                    _fallback_timers[jid] = _t.Timer(delay, _fallback)
+                    _fallback_timers[jid].daemon = True
+                    _fallback_timers[jid].start()
+                _fallback_timers[jid] = _t.Timer(delay, _fallback)
+                _fallback_timers[jid].daemon = True
+                _fallback_timers[jid].start()
+                logger.info(f"Scheduler fallback: {name} every {delay}s")
             return ok(f"शेड्यूल किया: {name} ({schedule}) ⏰", {"id": jid})
         if action in ("remove","delete","cancel"):
             jid = params.get("id","")
+            # Cancel fallback timer if exists
+            ft = _fallback_timers.pop(jid, None)
+            if ft:
+                ft.cancel()
             data = load_vault_data() or {}
             arr = data.get("scheduledJobs", [])
             data["scheduledJobs"] = [j for j in arr if j["id"]!=jid]
@@ -1652,6 +2374,107 @@ def cmd_terminal(action, params):
         return ok(f"exit {r.returncode}", {"stdout": out, "stderr": er, "returncode": r.returncode, "cwd": str(cwd_path)})
     except Exception as e:
         return err(str(e))
+
+# ── Code Execution (Open Interpreter style — full REPL + self-healing) ──
+_CODE_EXEC_GLOBALS = {
+    "__builtins__": __builtins__,
+    "os": os, "sys": sys, "json": json, "re": re, "time": time,
+    "datetime": datetime, "pathlib": Path, "Path": Path,
+    "subprocess": subprocess, "shutil": shutil,
+    "platform": platform, "math": math, "base64": base64,
+    "urllib": urllib.request, "requests": None,
+}
+# Persistent REPL state (survives across calls)
+_CODE_REPL_STATE: dict = {"globals": {}, "history": []}
+
+def cmd_code(action, params):
+    """Full REPL code execution — Open Interpreter style with self-healing."""
+    if action in ("exec", "execute", "run", "repl"):
+        code = str(params.get("code") or params.get("command") or params.get("script") or "").strip()
+        if not code:
+            return err("code खाली है")
+        # Load optional libraries
+        try:
+            import requests as _req
+            _CODE_REPL_STATE["globals"]["requests"] = _req
+        except: pass
+        try:
+            import pandas as _pd
+            _CODE_REPL_STATE["globals"]["pd"] = _pd
+            _CODE_REPL_STATE["globals"]["pandas"] = _pd
+        except: pass
+        try:
+            import numpy as _np
+            _CODE_REPL_STATE["globals"]["np"] = _np
+        except: pass
+        # Self-healing: if code fails, try to fix and retry once
+        for attempt in range(2):
+            import io
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            captured_out, captured_err = io.StringIO(), io.StringIO()
+            try:
+                sys.stdout, sys.stderr = captured_out, captured_err
+                exec_globals = dict(_CODE_EXEC_GLOBALS)
+                exec_globals.update(_CODE_REPL_STATE["globals"])
+                exec(code, exec_globals)
+                # Save state for next call
+                _CODE_REPL_STATE["globals"].update({k: v for k, v in exec_globals.items() if not k.startswith('_')})
+                out = captured_out.getvalue()[:8000]
+                er = captured_err.getvalue()[:4000]
+                _CODE_REPL_STATE["history"].append({"code": code[:500], "success": True, "output": out[:200]})
+                return ok(f"Code executed ✅", {"stdout": out, "stderr": er, "attempt": attempt+1})
+            except Exception as ex:
+                error_msg = str(ex)
+                if attempt == 0:
+                    # Self-healing: try to fix common errors
+                    fixed = False
+                    if "NameError" in error_msg and "'" in error_msg:
+                        # Missing import — try to auto-import
+                        missing = error_msg.split("'")[1] if "'" in error_msg else ""
+                        if missing in ("pd", "pandas", "np", "numpy", "requests", "json", "re", "os", "sys"):
+                            code = f"import {missing}\n" + code
+                            fixed = True
+                    if not fixed:
+                        # Can't auto-fix, return error
+                        sys.stdout, sys.stderr = old_stdout, old_stderr
+                        _CODE_REPL_STATE["history"].append({"code": code[:500], "success": False, "error": error_msg[:200]})
+                        return err(f"Error (attempt {attempt+1}): {error_msg}")
+                else:
+                    sys.stdout, sys.stderr = old_stdout, old_stderr
+                    _CODE_REPL_STATE["history"].append({"code": code[:500], "success": False, "error": error_msg[:200]})
+                    return err(f"Error after self-heal: {error_msg}")
+            finally:
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+    if action in ("eval", "evaluate"):
+        expr = str(params.get("expression") or params.get("code") or "").strip()
+        if not expr:
+            return err("expression खाली है")
+        try:
+            result = eval(expr, {"__builtins__": {}}, {
+                "math": math, "json": json, "re": re, "time": time,
+                "datetime": datetime, "Path": Path, "os": os,
+                "pd": _CODE_REPL_STATE["globals"].get("pd"),
+                "np": _CODE_REPL_STATE["globals"].get("np"),
+            })
+            return ok(f"Result: {result}", {"result": result})
+        except Exception as ex:
+            return err(f"Eval error: {ex}")
+    if action == "history":
+        return ok("REPL History", {"items": _CODE_REPL_STATE["history"][-20:]})
+    if action == "clear":
+        _CODE_REPL_STATE["globals"].clear()
+        _CODE_REPL_STATE["history"].clear()
+        return ok("REPL state cleared")
+    if action == "pip_install":
+        pkg = str(params.get("package", "")).strip()
+        if not pkg:
+            return err("package name खाली है")
+        try:
+            r = run([sys.executable, "-m", "pip", "install", pkg], timeout=60)
+            return ok(f"pip install {pkg}", {"stdout": (r.stdout or "")[:3000], "stderr": (r.stderr or "")[:2000], "returncode": r.returncode})
+        except Exception as ex:
+            return err(f"pip install failed: {ex}")
+    return err(f"अज्ञात code action: {action}")
 
 def cmd_clipboard(action, params):
     if not pyperclip:
@@ -1792,6 +2615,127 @@ def cmd_screen(action, params):
             x = int(params.get("x", 0)); y = int(params.get("y", 0)); w = int(params.get("w", 0)); h = int(params.get("h", 0))
             res = screen_peeler(x, y, w, h, do_ocr=True)
             return ok(f"Peel OCR: {res.get('ocr','')[:200]}", res)
+        if action == "pip":
+            # Picture-in-Picture always-on-top floating window
+            window_name = str(params.get("window", "") or params.get("name", "") or "").strip()
+            if not window_name:
+                return err("window name चाहिए (e.g. 'pip/Chrome' or 'pip/Netflix')")
+            try:
+                import ctypes
+                from ctypes import wintypes
+                user32 = ctypes.windll.user32
+                # Find window by name
+                hwnd = user32.FindWindowW(None, window_name)
+                if not hwnd:
+                    # Try partial match
+                    if gw:
+                        for w in gw.getAllWindows():
+                            if window_name.lower() in (w.title or "").lower():
+                                hwnd = user32.FindWindowW(None, w.title)
+                                break
+                if not hwnd:
+                    return err(f"Window '{window_name}' not found")
+                # Set as always-on-top (TOPMOST)
+                HWND_TOPMOST = -1
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_SHOWWINDOW = 0x0040
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                # Resize to PiP size (320x180) and move to bottom-right
+                screen_w = user32.GetSystemMetrics(0)
+                screen_h = user32.GetSystemMetrics(1)
+                pip_w, pip_h = 320, 180
+                pip_x = screen_w - pip_w - 20
+                pip_y = screen_h - pip_h - 60
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, pip_x, pip_y, pip_w, pip_h, SWP_SHOWWINDOW)
+                return ok(f"PiP mode: '{window_name}' — always-on-top {pip_w}x{pip_h} at ({pip_x},{pip_y}) 🖼️", {"hwnd": hwnd, "x": pip_x, "y": pip_y, "w": pip_w, "h": pip_h})
+            except Exception as ex:
+                return err(f"PiP failed: {ex}")
+        if action == "pip_off":
+            # Remove always-on-top from a window
+            window_name = str(params.get("window", "") or params.get("name", "") or "").strip()
+            if not window_name:
+                return err("window name चाहिए")
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                hwnd = user32.FindWindowW(None, window_name)
+                if not hwnd:
+                    if gw:
+                        for w in gw.getAllWindows():
+                            if window_name.lower() in (w.title or "").lower():
+                                hwnd = user32.FindWindowW(None, w.title)
+                                break
+                if not hwnd:
+                    return err(f"Window '{window_name}' not found")
+                HWND_NOTOPMOST = -2
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_SHOWWINDOW = 0x0040
+                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                return ok(f"PiP off: '{window_name}' — no longer always-on-top ✅")
+            except Exception as ex:
+                return err(f"pip_off failed: {ex}")
+
+        if action == "generate_image":
+            # Generate image from text prompt (DALL-E 3 or local Stable Diffusion)
+            prompt = str(params.get("prompt", "") or params.get("text", "")).strip()
+            if not prompt:
+                return err("prompt चाहिए for image generation")
+            size = str(params.get("size", "1024x1024"))
+            try:
+                # Try OpenAI DALL-E 3 first
+                openai_key = os.getenv("OPENAI_API_KEY", "")
+                if openai_key:
+                    payload = json.dumps({
+                        "model": "dall-e-3",
+                        "prompt": prompt,
+                        "size": size,
+                        "quality": "standard",
+                        "n": 1,
+                    }).encode()
+                    req = urllib.request.Request(
+                        "https://api.openai.com/v1/images/generations",
+                        data=payload,
+                        headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        result = json.loads(resp.read().decode())
+                        img_url = result["data"][0]["url"]
+                        # Download and save
+                        img_dir = Path.home() / ".pika" / "images"
+                        img_dir.mkdir(parents=True, exist_ok=True)
+                        fp = img_dir / f"gen_{datetime.now():%Y%m%d_%H%M%S}.png"
+                        urllib.request.urlretrieve(img_url, str(fp))
+                        return ok(f"Image generated: {fp.name} ✨", {"path": str(fp), "url": img_url, "prompt": prompt})
+                # Try local Stable Diffusion (ComfyUI/A1111)
+                sd_url = os.getenv("STABLE_DIFFUSION_URL", "http://127.0.0.1:7860")
+                try:
+                    payload = json.dumps({
+                        "prompt": prompt,
+                        "steps": 20,
+                        "width": int(size.split("x")[0]),
+                        "height": int(size.split("x")[1]),
+                    }).encode()
+                    req = urllib.request.Request(
+                        f"{sd_url}/sdapi/v1/txt2img",
+                        data=payload,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        result = json.loads(resp.read().decode())
+                        import base64 as _b64
+                        img_data = _b64.b64decode(result["images"][0])
+                        img_dir = Path.home() / ".pika" / "images"
+                        img_dir.mkdir(parents=True, exist_ok=True)
+                        fp = img_dir / f"gen_{datetime.now():%Y%m%d_%H%M%S}.png"
+                        fp.write_bytes(img_data)
+                        return ok(f"Image generated (SD): {fp.name} ✨", {"path": str(fp), "prompt": prompt})
+                except Exception:
+                    pass
+                return err("No image generation API available — set OPENAI_API_KEY or STABLE_DIFFUSION_URL in .env")
+            except Exception as ex:
+                return err(f"Image generation failed: {ex}")
 
         if action in ("brightness_set", "brightness"):
             percent = max(0, min(100, int(params.get("percent", params.get("level", 50)))))
@@ -1902,7 +2846,12 @@ def cmd_keyboard(action, params):
         return err("pyautogui ज़रूरी है")
     try:
         if action == "type":
-            pyautogui.typewrite(params.get("text", ""), interval=0.03)
+            txt = str(params.get("text", ""))
+            # System-wide dictation: use clipboard for Hindi/special chars
+            if any("\u0900" <= c <= "\u097F" for c in txt) or len(txt) > 50:
+                if atomic_clipboard_inject(txt):
+                    return ok(f"System-wide type ({len(txt)} chars) 📋⌨️")
+            pyautogui.typewrite(txt, interval=0.03)
             return ok("टेक्स्ट टाइप किया।")
         if action == "hotkey":
             keys = [k.strip() for k in params.get("keys", "").split("+") if k.strip()]
@@ -1910,6 +2859,61 @@ def cmd_keyboard(action, params):
                 pyautogui.hotkey(*keys)
                 return ok(f"हॉटकी: {'+'.join(keys)}")
             return err("कोई keys नहीं।")
+        if action == "dictate":
+            # Global system-wide dictation — type wherever cursor is
+            text = str(params.get("text", "") or params.get("query", "")).strip()
+            if not text:
+                return err("dictation text खाली है")
+            # Use clipboard method for reliability across all apps
+            if atomic_clipboard_inject(text):
+                return ok(f"Dictated to cursor position ✅ ({len(text)} chars) 🎤")
+            # Fallback: pyautogui type
+            pyautogui.typewrite(text, interval=0.02)
+            return ok(f"Dictated via keypress ✅ ({len(text)} chars) 🎤")
+        if action == "voice_to_text":
+            # Live voice dictation — record from mic, transcribe, return text
+            duration = int(params.get("duration", 5))
+            try:
+                import wave, struct
+                # Record audio
+                import pyaudio
+                pa = pyaudio.PyAudio()
+                stream = pa.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
+                frames = []
+                for _ in range(0, int(16000 / 1024 * duration)):
+                    data = stream.read(1024)
+                    frames.append(data)
+                stream.stop_stream()
+                stream.close()
+                pa.terminate()
+                # Save to temp file and transcribe
+                wf = wave.open("_pika_dictate.wav", "wb")
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"".join(frames))
+                wf.close()
+                # Transcribe with Vosk
+                if HAS_VOSK and _vosk_model:
+                    from vosk import KaldiRecognizer
+                    import wave as _w
+                    wf = _w.open("_pika_dictate.wav", "rb")
+                    rec = KaldiRecognizer(_vosk_model, 16000)
+                    while True:
+                        data = wf.readframes(4000)
+                        if len(data) == 0: break
+                        rec.AcceptWaveform(data)
+                    result = json.loads(rec.FinalResult())
+                    text = result.get("text", "")
+                    os.remove("_pika_dictate.wav")
+                    if text:
+                        return ok(f"Voice transcribed: {text}", {"text": text})
+                os.remove("_pika_dictate.wav")
+                return err("Voice transcription failed — Vosk model not loaded")
+            except ImportError:
+                return err("pyaudio ज़रूरी है (pip install pyaudio)")
+            except Exception as ex:
+                return err(f"voice_to_text: {ex}")
         return err(f"अज्ञात keyboard action: {action}")
     except Exception as e:
         return err(str(e))
@@ -2041,43 +3045,125 @@ def cmd_weather(action, params):
 
 # ─── Reminders ───────────────────────────────────────────────────────────────
 _reminders: list = []
+_reminder_timers: dict = {}  # rid -> threading.Timer for proper cancel
 _reminders_lock = threading.Lock()
 _main_loop = None
 
+
+def _persist_reminders():
+    """Save active reminders to vault for restart recovery."""
+    try:
+        data = load_vault_data() or {}
+        with _reminders_lock:
+            now = time.time()
+            active = [r for r in _reminders if r.get("trigger_at", 0) > now]
+            data["activeReminders"] = active
+        save_vault_data(data)
+    except Exception as ex:
+        logger.warning(f"Reminder persist failed: {ex}")
+
+def _restore_reminders():
+    """Restore reminders from vault on boot — re-arm timers for future ones."""
+    try:
+        data = load_vault_data() or {}
+        saved = data.get("activeReminders", [])
+        if not saved: return
+        now = time.time()
+        restored = 0
+        for r in saved:
+            trigger_at = r.get("trigger_at", 0)
+            rid = r.get("id", "")
+            text = r.get("text", "")
+            interval = r.get("interval")  # for recurring reminders
+            if trigger_at <= now and not interval:
+                continue  # already expired (non-recurring)
+            delay = max(0, trigger_at - now) if trigger_at > now else 0
+            with _reminders_lock:
+                _reminders.append({"id": rid, "text": text, "trigger_at": trigger_at, "interval": interval})
+            def fire(rid=rid, text=text, interval=interval):
+                global _reminders
+                with _reminders_lock:
+                    _reminders = [r for r in _reminders if r["id"] != rid]
+                _persist_reminders()
+                if _main_loop and _main_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        broadcast(json.dumps({
+                            "type": "event", "event": "reminder_triggered",
+                            "data": {"id": rid, "text": text},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })), _main_loop)
+                # Re-arm if recurring
+                if interval:
+                    _arm_timer(rid, text, interval, interval)
+                logger.info(f"Restored reminder fired: {text}")
+            t = threading.Timer(delay, fire)
+            t.daemon = True
+            t.start()
+            with _reminders_lock:
+                _reminder_timers[rid] = t
+            restored += 1
+        if restored:
+            logger.info(f"Restored {restored} reminders from vault")
+    except Exception as ex:
+        logger.warning(f"Reminder restore failed: {ex}")
+
+def _arm_timer(rid, text, delay, interval=None):
+    """Arm a timer for a reminder. If interval, it becomes recurring."""
+    def fire():
+        global _reminders
+        with _reminders_lock:
+            _reminders = [r for r in _reminders if r["id"] != rid]
+        _persist_reminders()
+        if _main_loop and _main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                broadcast(json.dumps({
+                    "type": "event", "event": "reminder_triggered",
+                    "data": {"id": rid, "text": text},
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })), _main_loop)
+        if interval:
+            _arm_timer(rid, text, interval, interval)
+        logger.info(f"Reminder fired: {text}")
+    t = threading.Timer(delay, fire)
+    t.daemon = True
+    t.start()
+    with _reminders_lock:
+        _reminder_timers[rid] = t
+    return t
 
 def cmd_reminders(action, params):
     global _reminders
     if action in ("create", "timer", "add"):
         text = params.get("text", "टाइमर पूरा!")
         seconds = float(params.get("seconds", 60))
+        interval = params.get("interval")  # recurring interval in seconds
         rid = str(uuid.uuid4())
+        trigger_at = time.time() + seconds
+        reminder = {"id": rid, "text": text, "trigger_at": trigger_at}
+        if interval:
+            reminder["interval"] = float(interval)
         with _reminders_lock:
-            _reminders.append({"id": rid, "text": text, "trigger_at": time.time() + seconds})
-
-        def fire():
-            global _reminders
-            with _reminders_lock:
-                _reminders = [r for r in _reminders if r["id"] != rid]
-            if _main_loop and _main_loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    broadcast(json.dumps({
-                        "type": "event", "event": "reminder_triggered",
-                        "data": {"id": rid, "text": text},
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })), _main_loop)
-            logger.info(f"Reminder fired: {text}")
-
-        t = threading.Timer(seconds, fire)
-        t.daemon = True
-        t.start()
-        return ok(f"रिमाइंडर सेट ({seconds/60:.1f} min): {text}", {"id": rid})
+            _reminders.append(reminder)
+        _persist_reminders()
+        _arm_timer(rid, text, seconds, float(interval) if interval else None)
+        msg = f"रिमाइंडर सेट ({seconds/60:.1f} min): {text}"
+        if interval:
+            msg += f" [recurring every {float(interval)/60:.1f} min]"
+        return ok(msg, {"id": rid})
     if action == "list":
         with _reminders_lock:
-            return ok("रिमाइंडर्स", {"items": list(_reminders)})
+            now = time.time()
+            active = [r for r in _reminders if r.get("trigger_at", 0) > now]
+            return ok("रिमाइंडर्स", {"items": active})
     if action == "cancel":
         rid = params.get("id")
         with _reminders_lock:
+            # Cancel the actual timer thread
+            t = _reminder_timers.pop(rid, None)
+            if t:
+                t.cancel()
             _reminders = [r for r in _reminders if r["id"] != rid]
+        _persist_reminders()
         return ok("रिमाइंडर रद्द।")
     return err(f"अज्ञात reminders action: {action}")
 
@@ -2366,8 +3452,391 @@ def cmd_vision(action: str, params: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  LONG-TERM MEMORY VAULT
+#  HERMES-GRADE PERSISTENT MEMORY (MEMORY.md + USER.md + SQLite)
 # ═══════════════════════════════════════════════════════════════════════════
+import sqlite3 as _sqlite3
+
+_MEMORY_DIR = Path.home() / ".pika" / "memory"
+_MEMORY_DB = _MEMORY_DIR / "memory.db"
+_MEMORY_MD = _MEMORY_DIR / "MEMORY.md"
+_USER_MD = _MEMORY_DIR / "USER.md"
+_SKILLS_DIR = _MEMORY_DIR / "skills"
+
+def _ensure_memory_dir():
+    """Create memory directory structure on first run."""
+    _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    _SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    if not _MEMORY_MD.exists():
+        _MEMORY_MD.write_text("# Pika Memory\n\nAgent notes, learned facts, and environment info.\n\n", encoding="utf-8")
+    if not _USER_MD.exists():
+        _USER_MD.write_text("# User Profile\n\nName: (not set)\nLanguage: Hinglish\nPreferences: (none yet)\n\n", encoding="utf-8")
+    # Init SQLite
+    conn = _sqlite3.connect(str(_MEMORY_DB))
+    conn.execute("""CREATE TABLE IF NOT EXISTS memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT DEFAULT 'general',
+        content TEXT NOT NULL,
+        importance REAL DEFAULT 0.5,
+        access_count INTEGER DEFAULT 0,
+        created_at TEXT,
+        last_accessed TEXT,
+        source TEXT DEFAULT 'user'
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS user_profile (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
+def _get_memory_db():
+    """Get SQLite connection (creates DB if needed)."""
+    _ensure_memory_dir()
+    conn = _sqlite3.connect(str(_MEMORY_DB))
+    conn.row_factory = _sqlite3.Row
+    return conn
+
+def _sync_memory_md():
+    """Sync MEMORY.md from SQLite memories (top 50 by importance)."""
+    try:
+        conn = _get_memory_db()
+        rows = conn.execute("SELECT category, content, importance, created_at FROM memories ORDER BY importance DESC, last_accessed DESC LIMIT 50").fetchall()
+        conn.close()
+        lines = ["# Pika Memory\n\n"]
+        for r in rows:
+            lines.append(f"- [{r['category']}] {r['content']} (importance: {r['importance']:.1f})\n")
+        _MEMORY_MD.write_text("".join(lines), encoding="utf-8")
+    except: pass
+
+def _sync_user_md():
+    """Sync USER.md from SQLite user_profile."""
+    try:
+        conn = _get_memory_db()
+        rows = conn.execute("SELECT key, value FROM user_profile ORDER BY key").fetchall()
+        conn.close()
+        lines = ["# User Profile\n\n"]
+        for r in rows:
+            lines.append(f"{r['key']}: {r['value']}\n")
+        _USER_MD.write_text("".join(lines), encoding="utf-8")
+    except: pass
+
+def memory_add(content: str, category: str = "general", importance: float = 0.5, source: str = "user") -> dict:
+    """Add a memory to SQLite + sync MEMORY.md."""
+    _ensure_memory_dir()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_memory_db()
+    conn.execute("INSERT INTO memories (category, content, importance, created_at, last_accessed, source) VALUES (?,?,?,?,?,?)",
+                 (category, content[:2000], max(0.0, min(1.0, importance)), now, now, source))
+    conn.commit()
+    conn.close()
+    _sync_memory_md()
+    return {"status": "added", "category": category, "importance": importance}
+
+def memory_search(query: str, top_k: int = 10, category: str = None) -> list:
+    """Search memories via SQLite FTS + TF-IDF hybrid."""
+    _ensure_memory_dir()
+    conn = _get_memory_db()
+    try:
+        # Update access count for retrieved memories
+        q = "SELECT id, category, content, importance, access_count, created_at FROM memories"
+        params = []
+        if category:
+            q += " WHERE category = ?"
+            params.append(category)
+        q += " ORDER BY importance DESC, last_accessed DESC LIMIT 200"
+        rows = conn.execute(q, params).fetchall()
+        
+        if not rows:
+            conn.close()
+            return []
+        
+        # TF-IDF scoring
+        import math
+        q_terms = [t.lower() for t in re.findall(r"[\w\u0900-\u097F]+", query.lower()) if len(t) > 1]
+        if not q_terms:
+            result = [{"id": r["id"], "category": r["category"], "content": r["content"],
+                       "importance": r["importance"], "created_at": r["created_at"]} for r in rows[:top_k]]
+            conn.close()
+            return result
+        
+        N = len(rows)
+        df = {}
+        doc_terms_list = []
+        for r in rows:
+            terms = [t.lower() for t in re.findall(r"[\w\u0900-\u097F]+", r["content"].lower())]
+            doc_terms_list.append(terms)
+            for t in set(terms):
+                df[t] = df.get(t, 0) + 1
+        
+        scored = []
+        now = datetime.now(timezone.utc)
+        for idx, r in enumerate(rows):
+            tf = {}
+            for t in doc_terms_list[idx]:
+                tf[t] = tf.get(t, 0) + 1
+            score = 0.0
+            for qt in q_terms:
+                if qt in tf:
+                    idf = math.log((N + 1) / (df.get(qt, 1) + 0.5))
+                    score += (tf[qt] / max(1, len(doc_terms_list[idx]))) * idf
+                    if qt in r["content"].lower():
+                        score += 0.15
+            # Importance boost
+            score += r["importance"] * 0.1
+            # Recency boost
+            try:
+                created = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                days = (now - created).days
+                if days < 7: score += 0.08
+                elif days < 30: score += 0.04
+            except: pass
+            if score > 0:
+                scored.append((score, idx))
+        
+        scored.sort(reverse=True)
+        result = []
+        ids_to_update = []
+        for _, idx in scored[:top_k]:
+            r = rows[idx]
+            result.append({"id": r["id"], "category": r["category"], "content": r["content"],
+                           "importance": r["importance"], "created_at": r["created_at"]})
+            ids_to_update.append(r["id"])
+        
+        # Update access counts
+        if ids_to_update:
+            placeholders = ",".join("?" * len(ids_to_update))
+            conn.execute(f"UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id IN ({placeholders})",
+                         [datetime.now(timezone.utc).isoformat()] + ids_to_update)
+            conn.commit()
+        
+        conn.close()
+        return result
+    except Exception as ex:
+        conn.close()
+        return []
+
+def memory_list(limit: int = 50) -> list:
+    """List all memories."""
+    _ensure_memory_dir()
+    conn = _get_memory_db()
+    rows = conn.execute("SELECT id, category, content, importance, access_count, created_at FROM memories ORDER BY last_accessed DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "category": r["category"], "content": r["content"],
+             "importance": r["importance"], "access_count": r["access_count"], "created_at": r["created_at"]} for r in rows]
+
+def memory_update_importance(memory_id: int, importance: float) -> bool:
+    """Update memory importance (0.0 to 1.0)."""
+    conn = _get_memory_db()
+    conn.execute("UPDATE memories SET importance = ? WHERE id = ?", (max(0.0, min(1.0, importance)), memory_id))
+    conn.commit()
+    changed = conn.total_changes > 0
+    conn.close()
+    _sync_memory_md()
+    return changed
+
+def memory_delete(memory_id: int) -> bool:
+    """Delete a memory by ID."""
+    conn = _get_memory_db()
+    conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    conn.commit()
+    changed = conn.total_changes > 0
+    conn.close()
+    _sync_memory_md()
+    return changed
+
+def memory_clear():
+    """Clear all memories."""
+    conn = _get_memory_db()
+    conn.execute("DELETE FROM memories")
+    conn.commit()
+    conn.close()
+    _sync_memory_md()
+
+# ─── User Profile ──────────────────────────────────────────────────────────
+def user_profile_get(key: str = None) -> dict:
+    """Get user profile field(s)."""
+    _ensure_memory_dir()
+    conn = _get_memory_db()
+    if key:
+        row = conn.execute("SELECT value FROM user_profile WHERE key = ?", (key,)).fetchone()
+        conn.close()
+        return {key: row["value"]} if row else {}
+    else:
+        rows = conn.execute("SELECT key, value FROM user_profile ORDER BY key").fetchall()
+        conn.close()
+        return {r["key"]: r["value"] for r in rows}
+
+def user_profile_set(key: str, value: str) -> dict:
+    """Set a user profile field."""
+    _ensure_memory_dir()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_memory_db()
+    conn.execute("INSERT OR REPLACE INTO user_profile (key, value, updated_at) VALUES (?,?,?)", (key, value[:1000], now))
+    conn.commit()
+    conn.close()
+    _sync_user_md()
+    return {"status": "set", "key": key, "value": value[:100]}
+
+def user_profile_all() -> dict:
+    """Get all user profile fields."""
+    _ensure_memory_dir()
+    conn = _get_memory_db()
+    rows = conn.execute("SELECT key, value FROM user_profile ORDER BY key").fetchall()
+    conn.close()
+    return {r["key"]: r["value"] for r in rows}
+
+# ─── Inject memory into LLM system prompt ──────────────────────────────────
+def _build_memory_context() -> str:
+    """Build memory context string for LLM injection."""
+    try:
+        _ensure_memory_dir()
+        # USER.md content
+        user_content = ""
+        if _USER_MD.exists():
+            user_content = _USER_MD.read_text(encoding="utf-8")[:1500]
+        # Top memories
+        mems = memory_list(limit=10)
+        mem_text = "\n".join(f"- {m['content'][:120]}" for m in mems)
+        # Skills list
+        skills = []
+        if _SKILLS_DIR.exists():
+            for f in _SKILLS_DIR.glob("*.md"):
+                skills.append(f.stem)
+        skills_text = ", ".join(skills[:20]) if skills else "none yet"
+        
+        return f"""## User Profile
+{user_content}
+
+## Learned Memories
+{mem_text}
+
+## Available Skills
+{skills_text}"""
+    except:
+        return ""
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HERMES-GRADE SKILL AUTO-GEN (Self-Improving Agent)
+# ═══════════════════════════════════════════════════════════════════════════
+def _ensure_skills_dir():
+    _SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
+def skill_save(name: str, description: str, steps: list, trigger: str = "") -> dict:
+    """Save a skill as markdown file."""
+    _ensure_skills_dir()
+    slug = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+    fp = _SKILLS_DIR / f"{slug}.md"
+    lines = [
+        f"# {name}\n\n",
+        f"**Trigger:** {trigger}\n\n" if trigger else "",
+        f"**Description:** {description}\n\n",
+        "## Steps\n\n",
+    ]
+    for i, step in enumerate(steps, 1):
+        lines.append(f"{i}. {step}\n")
+    lines.append(f"\n**Created:** {datetime.now(timezone.utc).isoformat()}\n")
+    fp.write_text("".join(lines), encoding="utf-8")
+    return {"status": "saved", "name": name, "file": str(fp), "slug": slug}
+
+def skill_list() -> list:
+    """List all saved skills."""
+    _ensure_skills_dir()
+    skills = []
+    for f in sorted(_SKILLS_DIR.glob("*.md")):
+        try:
+            content = f.read_text(encoding="utf-8")
+            # Extract trigger and description
+            trigger = ""
+            desc = ""
+            for line in content.splitlines():
+                if line.startswith("**Trigger:**"):
+                    trigger = line.split(":", 1)[1].strip()
+                elif line.startswith("**Description:**"):
+                    desc = line.split(":", 1)[1].strip()
+            skills.append({"name": f.stem, "trigger": trigger, "description": desc, "file": str(f)})
+        except: pass
+    return skills
+
+def skill_get(name: str) -> dict:
+    """Get a skill's full content."""
+    _ensure_skills_dir()
+    slug = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+    fp = _SKILLS_DIR / f"{slug}.md"
+    if not fp.exists():
+        # Try partial match
+        for f in _SKILLS_DIR.glob("*.md"):
+            if name.lower() in f.stem.lower():
+                fp = f
+                break
+    if not fp.exists():
+        return {"error": f"Skill '{name}' not found"}
+    return {"name": fp.stem, "content": fp.read_text(encoding="utf-8"), "file": str(fp)}
+
+def skill_delete(name: str) -> dict:
+    """Delete a skill."""
+    _ensure_skills_dir()
+    slug = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+    fp = _SKILLS_DIR / f"{slug}.md"
+    if fp.exists():
+        fp.unlink()
+        return {"status": "deleted", "name": name}
+    return {"error": f"Skill '{name}' not found"}
+
+def skill_auto_gen(task: str, result: str, tools_used: list) -> dict:
+    """Auto-generate a skill from a successful workflow execution."""
+    # Extract pattern from task + result
+    task_lower = task.lower()
+    # Detect category
+    category = "general"
+    if any(k in task_lower for k in ["file", "folder", "rename", "copy", "move"]):
+        category = "file_management"
+    elif any(k in task_lower for k in ["open", "launch", "start", "close", "app"]):
+        category = "app_control"
+    elif any(k in task_lower for k in ["screenshot", "capture", "screen"]):
+        category = "screen"
+    elif any(k in task_lower for k in ["search", "find", "google"]):
+        category = "web_search"
+    elif any(k in task_lower for k in ["email", "mail", "send"]):
+        category = "communication"
+    elif any(k in task_lower for k in ["schedule", "reminder", "timer", "cron"]):
+        category = "scheduling"
+    elif any(k in task_lower for k in ["volume", "mute", "brightness", "wifi", "bluetooth"]):
+        category = "system_control"
+    
+    # Generate skill name
+    name = f"{category}_{task_lower[:30].replace(' ', '_')}"
+    name = re.sub(r'[^a-z0-9_]', '', name)[:40]
+    
+    # Auto-generate description and steps
+    description = f"Auto-generated skill for: {task[:100]}"
+    steps = [f"User request: {task[:200]}"]
+    if tools_used:
+        steps.append(f"Tools used: {', '.join(tools_used)}")
+    steps.append(f"Result: {result[:200]}")
+    
+    # Save if not duplicate
+    existing = skill_list()
+    existing_names = [s["name"] for s in existing]
+    if name not in existing_names:
+        return skill_save(name, description, steps, trigger=task[:100])
+    return {"status": "exists", "name": name}
+
+def skill_execute(name: str, params: dict = None) -> dict:
+    """Execute a skill by name (parse steps and run tools)."""
+    skill = skill_get(name)
+    if "error" in skill:
+        return skill
+    # For now, return the skill content for LLM to interpret
+    return {"status": "skill_loaded", "name": name, "content": skill.get("content", ""), "params": params}
+
+# ─── Initialize memory on import ───────────────────────────────────────────
+try:
+    _ensure_memory_dir()
+except:
+    pass
 def _memory_search_ranked(query: str, vault: list, top_k: int = 5) -> list:
     """Lightweight hybrid search — TF-IDF + keyword + recency, no external DB required."""
     if not vault or not query.strip():
@@ -2423,29 +3892,23 @@ def _memory_search_ranked(query: str, vault: list, top_k: int = 5) -> list:
         return vault[-top_k:][::-1]
 
 def cmd_memory(action: str, params: dict) -> dict:
-    """Long-term Memory Vault — stores and recalls user facts and preferences."""
+    """Long-term Memory Vault — MEMORY.md + USER.md + SQLite searchable."""
     try:
-        existing = load_vault_data()
-        if not existing:
-            try:
-                if DATA_FILE.exists():
-                    existing = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-                else:
-                    existing = {}
-            except Exception:
-                existing = {}
-        
-        vault = existing.get("memoryVault", [])
-        
         if action == "add":
             fact = params.get("fact", "").strip()
             if not fact:
                 return err("कोई जानकारी नहीं मिली।")
-            entry = {"fact": fact, "created_at": datetime.now().isoformat()}
-            vault.append(entry)
-            existing["memoryVault"] = vault
-            save_vault_data(existing)
-            
+            category = params.get("category", "general")
+            importance = float(params.get("importance", 0.5))
+            result = memory_add(fact, category=category, importance=importance)
+            # Also add to legacy vault for backward compat
+            try:
+                existing = load_vault_data() or {}
+                vault = existing.get("memoryVault", [])
+                vault.append({"fact": fact, "created_at": datetime.now().isoformat(), "category": category})
+                existing["memoryVault"] = vault[-500:]
+                save_vault_data(existing)
+            except: pass
             # Also append to Obsidian if connected
             try:
                 obs_key = existing.get("settings", {}).get("obsidianApiKey") or os.getenv("OBSIDIAN_API_KEY", "")
@@ -2459,32 +3922,95 @@ def cmd_memory(action: str, params: dict) -> dict:
                     )
             except Exception:
                 pass
-            
-            return ok(f"याद रख लिया: '{fact}' 🧠", {"fact": fact, "total": len(vault)})
+            return ok(f"याद रख लिया: '{fact}' 🧠", {"fact": fact, "category": category, "importance": importance})
             
         elif action in ["get", "list"]:
-            if not vault:
-                return ok("अभी मेमोरी में कोई बात सेव नहीं है। आप 'याद रखो कि...' कहकर कुछ भी सेव करा सकते हैं।", {"facts": []})
             query = params.get("query", "") or params.get("q", "")
-            ranked = _memory_search_ranked(query, vault, top_k=10) if query else vault[-10:][::-1]
-            facts_text = "\n".join([f"• {v['fact']}" for v in ranked])
-            return ok(f"आपकी यादें ({len(vault)}):\n{facts_text}", {"facts": ranked, "total": len(vault)})
+            category = params.get("category", None)
+            if query:
+                ranked = memory_search(query, top_k=10, category=category)
+            else:
+                ranked = memory_list(limit=10)
+            if not ranked:
+                return ok("अभी मेमोरी में कोई बात सेव नहीं है।", {"facts": []})
+            facts_text = "\n".join([f"• [{m.get('category','general')}] {m['content']}" for m in ranked])
+            return ok(f"आपकी यादें ({len(ranked)}):\n{facts_text}", {"facts": ranked})
 
         elif action == "search":
             query = params.get("query", "") or params.get("q", "") or params.get("text", "")
             if not query:
                 return err("Search query खाली है।")
-            ranked = _memory_search_ranked(query, vault, top_k=8)
+            ranked = memory_search(query, top_k=8)
             if not ranked:
                 return ok("कोई मिलती-जुलती याद नहीं मिली।", {"facts": []})
-            facts_text = "\n".join([f"• {v['fact']}" for v in ranked])
+            facts_text = "\n".join([f"• [{m.get('category','general')}] {m['content']}" for m in ranked])
             return ok(f"सर्च परिणाम ({len(ranked)}):\n{facts_text}", {"facts": ranked})
             
         elif action == "clear":
-            existing["memoryVault"] = []
-            save_vault_data(existing)
+            memory_clear()
+            # Also clear legacy vault
+            try:
+                existing = load_vault_data() or {}
+                existing["memoryVault"] = []
+                save_vault_data(existing)
+            except: pass
             return ok("मेमोरी वॉल्ट खाली कर दिया गया है। 🧹", {"facts": []})
-            
+        
+        elif action == "profile_get":
+            key = params.get("key", None)
+            profile = user_profile_get(key)
+            return ok(f"User profile: {json.dumps(profile, ensure_ascii=False)[:500]}", {"profile": profile})
+        
+        elif action == "profile_set":
+            key = params.get("key", "")
+            value = params.get("value", "")
+            if not key or not value:
+                return err("key और value दोनों चाहिए।")
+            result = user_profile_set(key, value)
+            return ok(f"Profile set: {key} = {value[:50]}", result)
+        
+        elif action == "profile_all":
+            profile = user_profile_all()
+            return ok(f"Full profile: {json.dumps(profile, ensure_ascii=False)[:500]}", {"profile": profile})
+        
+        # ─── Skill actions ───
+        elif action == "skill_list":
+            skills = skill_list()
+            return ok(f"{len(skills)} skills available", {"skills": skills})
+        
+        elif action == "skill_get":
+            name = params.get("name", "")
+            skill = skill_get(name)
+            if "error" in skill:
+                return err(skill["error"])
+            return ok(f"Skill: {name}", skill)
+        
+        elif action == "skill_save":
+            name = params.get("name", "")
+            desc = params.get("description", "")
+            steps = params.get("steps", [])
+            trigger = params.get("trigger", "")
+            if not name:
+                return err("Skill name चाहिए।")
+            result = skill_save(name, desc, steps, trigger)
+            return ok(f"Skill saved: {name}", result)
+        
+        elif action == "skill_delete":
+            name = params.get("name", "")
+            result = skill_delete(name)
+            if "error" in result:
+                return err(result["error"])
+            return ok(f"Skill deleted: {name}", result)
+        
+        elif action == "skill_auto_gen":
+            task = params.get("task", "")
+            result_text = params.get("result", "")
+            tools = params.get("tools_used", [])
+            if not task:
+                return err("Task description चाहिए।")
+            result = skill_auto_gen(task, result_text, tools)
+            return ok(f"Skill auto-generated: {result.get('name', 'exists')}", result)
+        
         return err(f"अज्ञात memory action: {action}")
     except Exception as e:
         return err(f"Memory error: {e}")
@@ -2507,6 +4033,7 @@ ROUTES = {
     "browser": cmd_browser,
     "connectors": cmd_connectors,
     "scheduler": cmd_scheduler,
+    "code": cmd_code, "python": cmd_code, "execute": cmd_code,
     "network": lambda a, p: cmd_info("ip", p) if a == "ip" else err("अज्ञात network action"),
 }
 
@@ -2554,20 +4081,23 @@ def get_mcp_manifest() -> list:
         "window": {"desc": "Window management", "actions": ["minimize","maximize","close","switch","show_desktop","snap_left","snap_right","fullscreen","new_tab","close_tab","focus"]},
         "info": {"desc": "System telemetry (battery/cpu/ram/disk/ip/time)", "actions": ["battery","cpu","ram","disk","ip","time","date","full_report"]},
         "processes": {"desc": "Process list/kill", "actions": ["list","kill"]},
-        "files": {"desc": "Safe file operations under HOME", "actions": ["create_file","create_folder","delete","list","open_explorer","read","write","rename"]},
+        "files": {"desc": "Safe file operations under HOME", "actions": ["create_file","create_folder","delete","list","open_explorer","read","write","rename","search","copy","move","write_atomic"]},
         "disk": {"desc": "Drive usage & cleanup", "actions": ["list_drives","cleanup_temp"]},
         "clipboard": {"desc": "Clipboard read/write", "actions": ["save","get","set","clear","history"]},
-        "screen": {"desc": "Screenshots & brightness", "actions": ["screenshot","brightness_set","brightness_up","brightness_down"]},
+        "screen": {"desc": "Screenshots & brightness & recording", "actions": ["screenshot","brightness_set","brightness_up","brightness_down","start_recording","stop_recording","recording_status"]},
         "keyboard": {"desc": "Keyboard type/hotkey", "actions": ["type","hotkey"]},
         "web": {"desc": "Open sites/search/youtube play", "actions": ["open_site","search","youtube_search","youtube_play","play_song"]},
         "calculator": {"desc": "Safe math eval", "actions": ["eval"]},
         "password": {"desc": "Generate password", "actions": ["generate"]},
         "translator": {"desc": "Translate via MyMemory", "actions": ["translate"]},
         "weather": {"desc": "Weather via wttr.in", "actions": ["get"]},
-        "reminders": {"desc": "Timers & reminders", "actions": ["create","timer","add","list","cancel"]},
+        "reminders": {"desc": "Timers & reminders with vault persistence", "actions": ["create","timer","add","list","cancel"]},
         "obsidian": {"desc": "Obsidian Local REST API", "actions": ["list_files","read_file","create_file","append_file","delete_file","search","daily_note","get_active","open_file","status"]},
         "vision": {"desc": "Screen vision + research", "actions": ["analyze"]},
-        "memory": {"desc": "Long-term memory vault (add/list/search/clear) with hybrid ranked search", "actions": ["add","list","search","clear","get"]},
+        "memory": {"desc": "Long-term memory: MEMORY.md + USER.md + SQLite + Skills", "actions": ["add","list","search","clear","get","profile_get","profile_set","profile_all","skill_list","skill_get","skill_save","skill_delete","skill_auto_gen"]},
+        "uia": {"desc": "UI Automation — cursor/OCR/image find/multi-monitor", "actions": ["click","right_click","double_click","move","drag","type","scroll","get_position","get_monitors","find_text","find_image","tree"]},
+        "browser": {"desc": "Full Browser DOM automation — click/fill/extract/navigate", "actions": ["open","click","fill","type","extract","get_text","get_html","get_links","get_forms","fill_form","select","check","wait","screenshot","scroll","eval","back","forward","reload"]},
+        "code": {"desc": "Safe Python code execution sandbox (Open Interpreter style)", "actions": ["exec","execute","run","eval","evaluate"]},
     }
     for cat, func in ROUTES.items():
         if cat not in tool_defs: continue
@@ -2706,19 +4236,76 @@ SYSTEM_PROMPT = (
     "   • If user speaks/writes in ENGLISH (e.g. 'How does a transformer neural network work?') → Reply in clean, fluent and structured English.\n"
     "2. PERSONALITY & TONE: Warm, witty, proactive like a tech-savvy best friend. Never sound robotic, boring or overly formal.\n"
     "3. BREVITY & QUALITY: Keep chat answers crisp (1-2 emojis max). For coding, deep research, or tutorials, provide clear step-by-step markdown.\n"
-    "4. PC AUTOMATION: You control the user's PC (apps, volume, brightness, screenshots, system telemetry, Obsidian notes, files, web search). Confirm actions with cheerful confidence.\n"
+    "4. PC AUTOMATION: You control the user's PC (apps, volume, brightness, screenshots, system telemetry, Obsidian notes, files, web search, browser DOM). Confirm actions with cheerful confidence.\n"
     "5. FILE PATHS (HERMES/JARVIS-grade, no hallucination):\n"
     "   • 'desktop pr' ALWAYS means Desktop/daily_note_YYYY_MM_DD.txt via resolve_path() → C:\\Users\\DELL\\Desktop, NEVER E:\\obsidian or custom vault.\n"
     "   • '.txt daily note' → files/create_file Desktop/daily_note_YYYY_MM_DD.txt, '.md' → obsidian/read_file, 'camera' → microsoft.windows.camera: via find_installed_app_fast().\n"
     "   • For cursor: use uia/move {x,y}, uia/click {x,y,monitor}, uia/find_image {image_b64}, uia/find_text {text}, screen/start_recording.\n"
     "   • Never hallucinate paths; if unsure use files/list Desktop to confirm.\n"
-    "6. SELF-CORRECTION: If tool returns err, explain briefly in user's language and suggest fix, don't spam."
+    "6. MEMORY & SKILLS: You have persistent memory (MEMORY.md + USER.md + SQLite) and auto-generated skills.\n"
+    "   • Use memory/add to remember facts, memory/search to recall, memory/profile_set to update user profile.\n"
+    "   • Use memory/skill_list to see available skills, memory/skill_auto_gen to create new ones from successful workflows.\n"
+    "   • Always check memory before answering — the user's preferences and history are stored there.\n"
+    "7. BROWSER AUTOMATION: Full DOM control via Playwright.\n"
+    "   • Use browser/click {selector} to click elements, browser/fill {selector, value} to fill forms.\n"
+    "   • Use browser/extract {selector} to get text, browser/get_links to get all links.\n"
+    "   • Use browser/fill_form {fields: {sel1: val1, sel2: val2}} for multi-field forms.\n"
+    "8. SELF-CORRECTION: If tool returns err, explain briefly in user's language and suggest fix, don't spam.\n"
+    "9. REACT REASONING: For complex multi-step tasks, think step-by-step:\n"
+    "   • Step 1: Analyze what the user wants → break into smaller tasks\n"
+    "   • Step 2: Execute each task using the right tool (files, browser, code, etc.)\n"
+    "   • Step 3: Verify results before moving to next step\n"
+    "   • Step 4: If a step fails, try a DIFFERENT approach (don't repeat same error)\n"
+    "   • Example: 'Download notepad, open it, type hello, save as test.txt' = 4 steps, execute sequentially\n"
+    "10. CODE FIRST, GUI FALLBACK: When automating:\n"
+    "   • FIRST try: PowerShell/Python/code (99% faster, 100% accurate)\n"
+    "   • THEN try: UI Automation (uia/click, uia/move) for visual apps\n"
+    "   • LAST resort: Vision analysis (vision/analyze) for unknown interfaces\n"
+    "11. TOOL CALLING: When you need to use a tool, output EXACTLY:\n"
+    "   Action: {\"tool\": \"category/action\", \"params\": {\"key\": \"value\"}}\n"
+    "   After getting the result (Observation), continue with next step or Final Answer."
 )
+# Inject memory context into system prompt
+try:
+    _mem_ctx = _build_memory_context()
+    if _mem_ctx:
+        SYSTEM_PROMPT += f"\n\n## Current Context\n{_mem_ctx}"
+except:
+    pass
 HISTORY: list = []  # legacy global fallback
 HISTORY_BY_WS: dict = {}  # per-connection isolation
 LLM_SEMAPHORE = None  # lazy init asyncio.Semaphore(2)
 _LLM_RATE: dict = {}  # ws_id -> [timestamps] for rate limit
 CURRENT_PROVIDER = next((p for p in LLM_ORDER if os.getenv(LLM_PROVIDERS[p][2])), "groq")
+
+# ─── Token counting (approximation for Hindi/English mixed) ────────────────
+def _count_tokens(text: str) -> int:
+    """Approximate token count — ~1.3 tokens per word for Hindi/English mixed."""
+    if not text: return 0
+    words = len(text.split())
+    chars = len(text)
+    # Hindi chars are ~1.5 tokens each, English ~0.75 tokens per word
+    hindi_chars = sum(1 for c in text if '\u0900' <= c <= '\u097F')
+    eng_chars = chars - hindi_chars
+    return int(hindi_chars * 1.3 + eng_chars * 0.75 + words * 0.2)
+
+def _summarize_history(history: list, max_tokens: int = 3000) -> list:
+    """Compress history by summarizing older messages when too long."""
+    if not history: return history
+    total = sum(_count_tokens(m.get("content","")) for m in history)
+    if total <= max_tokens: return history
+    # Keep last 4 messages intact, summarize rest
+    keep = history[-4:]
+    old = history[:-4]
+    if not old: return keep
+    # Create a compact summary of old messages
+    summary_parts = []
+    for m in old:
+        role = m.get("role","user")
+        content = m.get("content","")[:100]
+        summary_parts.append(f"{role}: {content}")
+    summary = "[Earlier conversation summary]\n" + "\n".join(summary_parts[-6:])
+    return [{"role": "system", "content": summary}] + keep
 
 def _get_history(ws) -> list:
     wid = id(ws) if ws is not None else "global"
@@ -3253,6 +4840,361 @@ async def handle_agent_action(ws, msg):
     }))
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  REACT AGENT LOOP (Open Interpreter + Nous Hermes Style)
+#  Multi-step autonomous tool calling with self-correction
+# ═══════════════════════════════════════════════════════════════════════════
+_REACT_MAX_STEPS = 8
+_REACT_SYSTEM_PROMPT = """You are Pika ReAct — an autonomous multi-step agent.
+
+## How You Work (ReAct Pattern)
+For EVERY user request, you MUST follow this exact pattern:
+
+Thought: [Analyze what the user wants, break it into steps]
+Action: [Call a tool using JSON: {"tool": "category/action", "params": {...}}]
+Observation: [Read the tool result carefully]
+... (repeat Thought/Action/Observation as needed) ...
+Final Answer: [Give the user a clear, friendly answer in Hinglish/Hindi/English]
+
+## Available Tools (JSON format)
+- {"tool": "system/shutdown", "params": {}} — PC shutdown
+- {"tool": "system/lock", "params": {}} — Lock PC
+- {"tool": "volume/set", "params": {"percent": 50}} — Set volume
+- {"tool": "apps/open", "params": {"name": "notepad"}} — Open app
+- {"tool": "files/create_file", "params": {"path": "file.txt", "content": "..."}} — Create file
+- {"tool": "files/read", "params": {"path": "file.txt"}} — Read file
+- {"tool": "files/list", "params": {"path": "."}} — List files
+- {"tool": "files/search", "params": {"pattern": "*.txt"}} — Search files
+- {"tool": "screen/screenshot", "params": {}} — Take screenshot
+- {"tool": "clipboard/set", "params": {"text": "..."}} — Set clipboard
+- {"tool": "clipboard/get", "params": {}} — Get clipboard
+- {"tool": "web/search", "params": {"query": "..."}} — Web search
+- {"tool": "web/open_site", "params": {"url": "..."}} — Open website
+- {"tool": "code/exec", "params": {"code": "print('hello')"}} — Run Python code
+- {"tool": "code/eval", "params": {"expression": "2+2"}} — Evaluate expression
+- {"tool": "calculator/eval", "params": {"expression": "sqrt(16)"}} — Math calc
+- {"tool": "memory/add", "params": {"content": "fact", "category": "info"}} — Save memory
+- {"tool": "memory/search", "params": {"query": "..."}} — Search memory
+- {"tool": "browser/open", "params": {"url": "..."}} — Open in browser
+- {"tool": "browser/click", "params": {"selector": "#btn"}} — Click element
+- {"tool": "browser/fill", "params": {"selector": "#input", "value": "..."}} — Fill form
+- {"tool": "browser/extract", "params": {"selector": "body"}} — Extract text
+- {"tool": "uia/click", "params": {"x": 500, "y": 300}} — Click screen coords
+- {"tool": "uia/move", "params": {"x": 500, "y": 300}} — Move cursor
+- {"tool": "vision/analyze", "params": {"query": "what's on screen"}} — Analyze screen
+
+## Rules
+1. ALWAYS start with "Thought:" — never skip reasoning
+2. Use EXACT JSON for tool calls: {"tool": "category/action", "params": {...}}
+3. After each Action, wait for Observation before continuing
+4. If a tool fails, analyze the error and try a DIFFERENT approach
+5. Maximum 8 steps — if not solved, explain what happened
+6. Respond in the user's language (Hinglish/Hindi/English)
+7. NEVER make up tool results — always wait for actual Observation
+8. For complex tasks: break into smaller steps and execute one by one
+"""
+
+# Hermes-style tool definitions (JSON Schema)
+HERMES_TOOLS = [
+    {"type": "function", "function": {"name": "system_shutdown", "description": "Shutdown the PC", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "system_lock", "description": "Lock the PC", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "volume_set", "description": "Set volume to exact percentage", "parameters": {"type": "object", "properties": {"percent": {"type": "integer", "description": "Volume 0-100"}}, "required": ["percent"]}}},
+    {"type": "function", "function": {"name": "apps_open", "description": "Open an application", "parameters": {"type": "object", "properties": {"name": {"type": "string", "description": "App name"}}, "required": ["name"]}}},
+    {"type": "function", "function": {"name": "files_create", "description": "Create a file with content", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "files_read", "description": "Read a file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "files_list", "description": "List files in directory", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "files_search", "description": "Search files by pattern", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "screen_screenshot", "description": "Take a screenshot", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "clipboard_get", "description": "Get clipboard content", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "clipboard_set", "description": "Set clipboard content", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
+    {"type": "function", "function": {"name": "web_search", "description": "Search the web", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "web_open", "description": "Open a website", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {"name": "code_exec", "description": "Execute Python code safely", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {"type": "function", "function": {"name": "code_eval", "description": "Evaluate a math expression", "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}}},
+    {"type": "function", "function": {"name": "calculator_eval", "description": "Safe math evaluation", "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}}},
+    {"type": "function", "function": {"name": "memory_add", "description": "Save a fact to memory", "parameters": {"type": "object", "properties": {"content": {"type": "string"}, "category": {"type": "string"}}, "required": ["content"]}}},
+    {"type": "function", "function": {"name": "memory_search", "description": "Search memory", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {"name": "browser_open", "description": "Open URL in browser", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {"name": "browser_click", "description": "Click a DOM element", "parameters": {"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"]}}},
+    {"type": "function", "function": {"name": "browser_fill", "description": "Fill a form field", "parameters": {"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}, "required": ["selector", "value"]}}},
+    {"type": "function", "function": {"name": "browser_extract", "description": "Extract text from page", "parameters": {"type": "object", "properties": {"selector": {"type": "string"}}, "required": []}}},
+    {"type": "function", "function": {"name": "uia_click", "description": "Click at screen coordinates", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
+    {"type": "function", "function": {"name": "uia_move", "description": "Move cursor to coordinates", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
+    {"type": "function", "function": {"name": "vision_analyze", "description": "Analyze what's on screen", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": []}}},
+]
+
+def _parse_react_tool_call(text: str) -> dict | None:
+    """Extract JSON tool call from LLM output. Supports multiple formats."""
+    import re as _re
+    # Format 1: {"tool": "category/action", "params": {...}} — find JSON with balanced braces
+    # Try to find a JSON object containing "tool" key
+    for m in _re.finditer(r'\{', text):
+        start = m.start()
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == '{': depth += 1
+            elif text[i] == '}': depth -= 1
+            if depth == 0:
+                candidate = text[start:i+1]
+                if '"tool"' in candidate and '"params"' in candidate:
+                    try:
+                        return json.loads(candidate)
+                    except: pass
+                break
+    # Format 2: <tool_call>{"name": "func", "arguments": {...}}</tool_call>
+    m = _re.search(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', text, _re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1))
+            return {"tool": data.get("name",""), "params": data.get("arguments",{})}
+        except: pass
+    # Format 3: Action: tool_name(params)
+    m = _re.search(r'Action:\s*(\w+)\((.*?)\)', text, _re.DOTALL)
+    if m:
+        tool_name = m.group(1)
+        try:
+            params = json.loads("{" + m.group(2) + "}") if m.group(2).strip() else {}
+        except:
+            params = {"raw": m.group(2)}
+        return {"tool": tool_name, "params": params}
+    return None
+
+def _resolve_react_tool(tool_path: str) -> tuple:
+    """Resolve 'category/action' to (category, action)."""
+    parts = tool_path.split("/", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return tool_path, ""
+
+async def handle_react_agent(ws, msg):
+    """ReAct Agent Loop — multi-step autonomous tool calling with self-correction."""
+    params = msg.get("params") or {}
+    text = params.get("text", "")
+    conv_id = msg.get("id")
+    provider_name = params.get("provider", "groq")
+    
+    # Get API key
+    provider_info = LLM_PROVIDERS.get(provider_name, ("", "", ""))
+    url, default_model, env_var = provider_info
+    api_key = params.get("api_key", "") or os.getenv(env_var, "")
+    model = (params.get("provider_models") or {}).get(provider_name, default_model)
+    
+    if not api_key:
+        await ws.send(json.dumps({"type": "llm_stream", "chunk": "Error: No API key for ReAct agent.", "done": True, "id": conv_id}))
+        return
+    
+    # Build tool schema for LLM
+    tools_text = "\n".join([f"- {t['function']['name']}: {t['function']['description']}" for t in HERMES_TOOLS])
+    
+    messages = [
+        {"role": "system", "content": _REACT_SYSTEM_PROMPT + f"\n\n## Your Tools\n{tools_text}"},
+        {"role": "user", "content": text}
+    ]
+    
+    # Send agent started event
+    await ws.send(json.dumps({
+        "type": "event", "event": "react_started",
+        "data": {"query": text},
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }))
+    
+    for step in range(_REACT_MAX_STEPS):
+        # Call LLM
+        full_response = ""
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.3,
+                    "max_tokens": 2048,
+                }
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        await ws.send(json.dumps({"type": "event", "event": "react_step", "data": {"step": step+1, "status": "error", "error": error_text[:200]}, "timestamp": datetime.now(timezone.utc).isoformat()}))
+                        break
+                    result = await resp.json()
+                    full_response = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except Exception as e:
+            await ws.send(json.dumps({"type": "event", "event": "react_step", "data": {"step": step+1, "status": "error", "error": str(e)[:200]}, "timestamp": datetime.now(timezone.utc).isoformat()}))
+            break
+        
+        # Send step event
+        await ws.send(json.dumps({
+            "type": "event", "event": "react_step",
+            "data": {"step": step+1, "response": full_response[:500]},
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }))
+        
+        # Check for Final Answer
+        if "Final Answer:" in full_response:
+            final = full_response.split("Final Answer:")[-1].strip()
+            await ws.send(json.dumps({
+                "type": "llm_stream", "chunk": final,
+                "provider": provider_name, "id": conv_id, "done": True,
+                "usage": {"prompt_tokens": len(text)//4, "completion_tokens": len(full_response)//4, "total_tokens": (len(text)+len(full_response))//4},
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }))
+            return
+        
+        # Parse tool call
+        tool_call = _parse_react_tool_call(full_response)
+        if not tool_call:
+            # No tool call found — treat as final answer
+            await ws.send(json.dumps({
+                "type": "llm_stream", "chunk": full_response,
+                "provider": provider_name, "id": conv_id, "done": True,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }))
+            return
+        
+        # Execute tool
+        tool_path = tool_call.get("tool", "")
+        tool_params = tool_call.get("params", {})
+        category, action = _resolve_react_tool(tool_path)
+        
+        await ws.send(json.dumps({
+            "type": "event", "event": "react_tool_call",
+            "data": {"tool": tool_path, "params": tool_params, "step": step+1},
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }))
+        
+        # Route command
+        result = route_command({"category": category, "action": action, "params": tool_params})
+        observation = json.dumps(result, ensure_ascii=False)[:2000]
+        
+        await ws.send(json.dumps({
+            "type": "event", "event": "react_tool_result",
+            "data": {"tool": tool_path, "result": result.get("message", "")[:300], "success": result.get("success", False)},
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }))
+        
+        # Feed observation back to LLM
+        messages.append({"role": "assistant", "content": full_response})
+        messages.append({"role": "user", "content": f"Observation: {observation}\n\nNow continue with the next Thought/Action or Final Answer."})
+    
+    # Max steps reached
+    await ws.send(json.dumps({
+        "type": "llm_stream", "chunk": "ReAct agent completed max steps. Please check the results above.",
+        "provider": provider_name, "id": conv_id, "done": True,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  VLM VISION GROUNDING (Anthropic Computer Use Style)
+#  Screenshot → identify clickable elements → return X,Y coordinates
+# ═══════════════════════════════════════════════════════════════════════════
+async def handle_vlm_grounding(ws, msg):
+    """Take screenshot, send to VLM, get element coordinates for clicking."""
+    params = msg.get("params") or {}
+    query = params.get("query", "Find the clickable elements and their coordinates")
+    conv_id = msg.get("id")
+    
+    # Take screenshot
+    try:
+        from PIL import ImageGrab, Image
+        import io as _io
+        img = ImageGrab.grab()
+        max_w = 1280
+        ratio = max_w / img.width
+        img = img.resize((max_w, int(img.height * ratio)), Image.Resampling.LANCZOS)
+        buf = _io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=75)
+        b64_image = base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception as e:
+        await ws.send(json.dumps({"type": "llm_stream", "chunk": f"Screenshot error: {e}", "done": True, "id": conv_id}))
+        return
+    
+    # VLM grounding prompt
+    grounding_prompt = f"""Analyze this screenshot and find clickable UI elements.
+
+User wants to: {query}
+
+For EACH clickable element you find, return a JSON array:
+[
+  {{"name": "element description", "x": <center_x>, "y": <center_y>, "type": "button/link/input/icon"}},
+  ...
+]
+
+Rules:
+- x,y are CENTER coordinates in pixels (origin top-left)
+- Image is 1280px wide, coordinates must be within that range
+- Only include actually clickable elements (buttons, links, inputs, icons)
+- Be precise — these coordinates will be used for clicking
+- Return ONLY the JSON array, no other text
+"""
+    
+    # Try providers in order
+    providers = [
+        ("groq", os.getenv("GROQ_API_KEY", ""), "llama-3.2-11b-vision-preview"),
+        ("gemini", os.getenv("GEMINI_API_KEY", ""), "gemini-1.5-flash"),
+        ("mistral", os.getenv("MISTRAL_API_KEY", ""), "pixtral-12b-2409"),
+    ]
+    
+    grounding_result = None
+    for prov_name, api_key, model_id in providers:
+        if not api_key:
+            continue
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                if prov_name == "groq":
+                    payload = {
+                        "model": model_id,
+                        "messages": [{"role": "user", "content": [
+                            {"type": "text", "text": grounding_prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                        ]}],
+                        "max_tokens": 1024,
+                    }
+                    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                    async with session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            grounding_result = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            break
+                elif prov_name == "gemini":
+                    import urllib.request as _req
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}"
+                    payload = {"contents": [{"parts": [{"text": grounding_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": b64_image}}]}]}
+                    data = json.dumps(payload).encode()
+                    req = _req.Request(url, data=data, headers={"Content-Type": "application/json"})
+                    with _req.urlopen(req, timeout=15) as r:
+                        result = json.loads(r.read().decode())
+                        grounding_result = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        break
+        except Exception:
+            continue
+    
+    if not grounding_result:
+        await ws.send(json.dumps({"type": "llm_stream", "chunk": "VLM grounding failed. No provider available.", "done": True, "id": conv_id}))
+        return
+    
+    # Parse coordinates from VLM response
+    import re as _re
+    elements = []
+    try:
+        # Try to extract JSON array from response
+        m = _re.search(r'\[.*?\]', grounding_result, _re.DOTALL)
+        if m:
+            elements = json.loads(m.group())
+    except:
+        pass
+    
+    # Send results
+    await ws.send(json.dumps({
+        "type": "vlm_grounding_result",
+        "elements": elements,
+        "raw_analysis": grounding_result[:1000],
+        "id": conv_id,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }))
+
+
 async def status_loop(ws):
     """Periodically sends live CPU, RAM, and Battery telemetry to connected clients."""
     try:
@@ -3417,6 +5359,14 @@ async def handle_client(ws):
 
             if mtype == "agent_action":
                 await handle_agent_action(ws, data)
+                continue
+
+            if mtype == "react_agent":
+                await handle_react_agent(ws, data)
+                continue
+
+            if mtype == "vlm_grounding":
+                await handle_vlm_grounding(ws, data)
                 continue
 
             if mtype == "mcp_list_tools":
@@ -3586,19 +5536,182 @@ def print_banner():
 """)
 
 
+# ─── CLI Arguments (argparse) ──────────────────────────────────────────────
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Pika AI — PC Bridge WebSocket Server")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--no-banner", action="store_true", help="Suppress startup banner")
+    return parser.parse_args()
+
+# ─── Graceful Shutdown ─────────────────────────────────────────────────────
+_shutdown_event = threading.Event()
+
+def _cleanup_on_shutdown():
+    """Cleanup threads, recordings, timers on shutdown."""
+    logger.info("Shutting down — cleaning up...")
+    _shutdown_event.set()
+    # Stop any active screen recording
+    global _recording
+    try:
+        if _recording:
+            _recording = False
+            logger.info("Screen recording stopped")
+    except: pass
+    # Persist active reminders
+    try:
+        _persist_reminders()
+        logger.info("Reminders persisted")
+    except: pass
+    logger.info("Cleanup complete")
+
+
 async def main():
-    global _main_loop
+    global _main_loop, HOST, PORT
     _main_loop = asyncio.get_running_loop()
     threading.Thread(target=ensure_vosk_model, daemon=True).start()
+    _restore_reminders()  # Restore persisted reminders on boot
+    # Start Telegram bot if configured
+    tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if tg_token:
+        threading.Thread(target=_start_telegram_bot, args=(tg_token,), daemon=True).start()
+        logger.info("Telegram bot started")
     print_banner()
+    # Register shutdown handler
+    import signal
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _cleanup_on_shutdown)
+        except: pass
     async with serve(handle_client, HOST, PORT):
         await asyncio.Future()
 
 
+# ── Telegram Bot Bridge ──────────────────────────────────────────────────
+def _start_telegram_bot(token: str):
+    """Start Telegram bot in background thread — receives messages, routes to Pika, sends response."""
+    try:
+        import urllib.request as _req
+        import urllib.parse as _parse
+        import time as _t
+        
+        API = f"https://api.telegram.org/bot{token}"
+        offset = 0
+        logger.info(f"Telegram bot polling started")
+        
+        def send_message(chat_id, text):
+            """Send message to Telegram chat."""
+            try:
+                data = _parse.urlencode({"chat_id": chat_id, "text": text[:4000], "parse_mode": "HTML"}).encode()
+                req = _req.Request(f"{API}/sendMessage", data=data, method="POST")
+                _req.urlopen(req, timeout=10)
+            except Exception as ex:
+                logger.warning(f"Telegram send failed: {ex}")
+        
+        while True:
+            try:
+                # Get updates
+                req = _req.Request(f"{API}/getUpdates?offset={offset}&timeout=30")
+                with _req.urlopen(req, timeout=35) as resp:
+                    data = json.loads(resp.read().decode())
+                
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    msg = update.get("message", {})
+                    chat_id = msg.get("chat", {}).get("id")
+                    text = msg.get("text", "")
+                    
+                    if not chat_id or not text:
+                        continue
+                    
+                    # Handle /start command
+                    if text == "/start":
+                        send_message(chat_id, "🤖 Pika AI Bot connected!\n\nबस कुछ भी बोलो या टाइप करो — मैं जवाब दूँगा!\n\nCommands:\n/status - PC status\n/screenshot - Screen capture\n/volume - Volume info")
+                        continue
+                    
+                    # Handle /status command
+                    if text == "/status":
+                        info = cmd_info("full_report", {})
+                        send_message(chat_id, f"📊 PC Status:\n{info.get('message', 'N/A')}")
+                        continue
+                    
+                    # Route message through Pika's LLM
+                    try:
+                        # Quick command routing
+                        low = text.lower()
+                        if "screenshot" in low:
+                            result = cmd_screen("screenshot", {})
+                            send_message(chat_id, f"📸 {result.get('message', 'Done')}")
+                        elif "volume" in low:
+                            result = cmd_info("battery", {})
+                            send_message(chat_id, f"🔊 {result.get('message', 'N/A')}")
+                        elif "battery" in low:
+                            result = cmd_info("battery", {})
+                            send_message(chat_id, f"🔋 {result.get('message', 'N/A')}")
+                        elif "time" in low:
+                            result = cmd_info("time", {})
+                            send_message(chat_id, f"⏰ {result.get('message', 'N/A')}")
+                        elif "open" in low:
+                            app = text.replace("open", "").strip()
+                            result = cmd_apps("open", {"name": app})
+                            send_message(chat_id, f"🚀 {result.get('message', 'Done')}")
+                        else:
+                            # Send to LLM for general response
+                            result = _quick_llm_response(text)
+                            send_message(chat_id, result)
+                    except Exception as ex:
+                        send_message(chat_id, f"❌ Error: {str(ex)[:200]}")
+                
+            except Exception as ex:
+                if "timeout" not in str(ex).lower():
+                    logger.warning(f"Telegram poll error: {ex}")
+                    _t.sleep(5)
+    except Exception as ex:
+        logger.error(f"Telegram bot failed to start: {ex}")
+
+
+def _quick_llm_response(text: str) -> str:
+    """Quick LLM response for Telegram messages — uses first available provider."""
+    try:
+        provider_name = CURRENT_PROVIDER
+        provider_info = LLM_PROVIDERS.get(provider_name, ("", "", ""))
+        url, model, env_var = provider_info
+        api_key = os.getenv(env_var, "")
+        if not api_key or not url:
+            return f"收到: {text}"
+        
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are Pika, a friendly AI assistant. Reply in the user's language (Hinglish/Hindi/English). Keep it short and helpful."},
+                {"role": "user", "content": text}
+            ],
+            "max_tokens": 500,
+            "temperature": 0.7,
+        }
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read().decode())
+            return result.get("choices", [{}])[0].get("message", {}).get("content", "...")
+    except Exception:
+        return f"收到: {text}"
+
+
 if __name__ == "__main__":
     try:
+        args = parse_args()
+        HOST = args.host
+        PORT = args.port
+        if args.debug:
+            logging.getLogger().setLevel(logging.DEBUG)
         asyncio.run(main())
     except KeyboardInterrupt:
+        _cleanup_on_shutdown()
         print("\n\n⚡ Pika PC Bridge stopped. फिर मिलेंगे!")
 
 
