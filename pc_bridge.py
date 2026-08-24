@@ -4314,7 +4314,7 @@ def _test_provider_http(provider: str, base_url: str = "", api_key: str = "", mo
     last_err = None
     for target_url in unique_urls:
         try:
-            r = requests.get(target_url, headers=headers, timeout=2.5)
+            r = requests.get(target_url, headers=headers, timeout=8)
             lat = round((time.perf_counter() - start_t) * 1000)
             if r.status_code == 200:
                 data = r.json()
@@ -4339,6 +4339,24 @@ def _test_provider_http(provider: str, base_url: str = "", api_key: str = "", mo
                 last_err = f"HTTP {r.status_code}"
         except Exception as ex:
             last_err = str(ex)
+            # WinError 10013 = Windows Firewall/Antivirus ne outbound block kiya
+            if "10013" in last_err or "forbidden by its access permissions" in last_err:
+                last_err = ("Windows Firewall ne block kiya (WinError 10013). "
+                            "Fix: Windows Defender Firewall → Allow an app → "
+                            "pc_bridge.exe / python.exe ko Allow karein, "
+                            "ya Admin PowerShell me: netsh advfirewall firewall add rule "
+                            "name=\"Pika AI Bridge\" dir=out action=allow program=\""
+                            + (sys.executable if _FROZEN else sys.executable) + "\" enable=yes")
+                # Best-effort auto-allow (needs Admin, may fail silently)
+                try:
+                    import subprocess as _sp2
+                    prog = sys.executable if _FROZEN else sys.executable
+                    _sp2.run(["netsh", "advfirewall", "firewall", "add", "rule",
+                              "name=Pika AI Bridge", "dir=out", "action=allow",
+                              f"program=\"{prog}\"", "enable=yes"],
+                             capture_output=True, timeout=4)
+                except Exception:
+                    pass
 
     if is_omniroute and is_port_open:
         lat = round((time.perf_counter() - start_t) * 1000)
