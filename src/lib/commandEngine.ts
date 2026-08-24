@@ -209,6 +209,14 @@ const RULES: Rule[] = [
       return cmd("calculator","eval",{expression:m[1].trim()},r.ok?`🧮 ${m[1].trim()} = ${r.value}`:r.error||"error");
     }},
 
+  // ══════ CODE EXECUTION (Open Interpreter Style) ══════
+  { re: /(?:python|code|script)\s*(?:run|chalao|execute|karo)\s*:?\s*(.+)/i, handle: (m) => cmd("code","exec",{code:m[1].trim()},`🐍 Running code...`) },
+  { re: /(?:run|chalao|execute|karo)\s+(?:python|code|script)\s*:?\s*(.+)/i, handle: (m) => cmd("code","exec",{code:m[1].trim()},`🐍 Running code...`) },
+  { re: /(?:csv|data)\s*(?:banao|create|generate)\s*(?:karo)?\s*(?:from|se)?\s*(.+)/i, handle: (m) => cmd("code","exec",{code:`import pandas as pd\n${m[1].trim()}`},`📊 Generating data...`) },
+  { re: /(?:plot|graph|chart)\s*(?:banao|create|generate)\s*(?:karo)?\s*(?:from|se)?\s*(.+)/i, handle: (m) => cmd("code","exec",{code:`import matplotlib.pyplot as plt\n${m[1].trim()}`},`📈 Generating plot...`) },
+  { re: /(?:script|code)\s*(?:list|history|dikhao)/i, handle: () => cmd("code","history",{},"📜 Code history") },
+  { re: /(?:artifacts|output|files)\s*(?:list|dikhao)/i, handle: () => cmd("code","artifacts",{},"📁 Generated artifacts") },
+
   // ══════ PASSWORD ══════
   { re: /(?:generate|banao)\s+(?:password)\s*(\d+)?/i, handle: (m) => cmd("password","generate",{length:m[1]?+m[1]:16},"🔐 Password generated") },
 

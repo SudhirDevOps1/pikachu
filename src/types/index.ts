@@ -56,6 +56,7 @@ export interface ChatMessage {
   timestamp: string;
   provider?: string;
   isStreaming?: boolean;
+  toolCalls?: { category: string; action: string; status: "running" | "done" | "error"; result?: string }[];
 }
 
 export interface SystemStatus {

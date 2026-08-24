@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Copy, Check, Pencil, Volume2, RotateCcw, X, Send, CheckCircle2 } from "lucide-react";
+import { Copy, Check, Pencil, Volume2, RotateCcw, X, Send, CheckCircle2, Loader2, Terminal, AlertCircle } from "lucide-react";
 import { cn } from "@/utils/cn";
 import type { ChatMessage as ChatMessageType } from "@/types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -170,6 +170,30 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
               <MarkdownRenderer content={message.content || "\u00a0"} />
               {message.isStreaming && (
                 <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-cyan-400 align-middle" />
+              )}
+              {/* Tool execution steps — Open Interpreter style */}
+              {message.toolCalls && message.toolCalls.length > 0 && (
+                <div className="mt-3 space-y-1.5">
+                  {message.toolCalls.map((tc, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs font-mono">
+                      {tc.status === "running" && <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />}
+                      {tc.status === "done" && <CheckCircle2 className="w-3 h-3 text-green-400" />}
+                      {tc.status === "error" && <AlertCircle className="w-3 h-3 text-red-400" />}
+                      <Terminal className="w-3 h-3 text-white/40" />
+                      <span className="text-white/60">
+                        {tc.category}/{tc.action}
+                      </span>
+                      {tc.result && (
+                        <span className={cn(
+                          "text-[10px] truncate max-w-[200px]",
+                          tc.status === "done" ? "text-green-400/70" : tc.status === "error" ? "text-red-400/70" : "text-cyan-400/70"
+                        )}>
+                          {tc.result}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </>
           )}

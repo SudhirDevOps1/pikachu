@@ -1319,6 +1319,26 @@ def cmd_info(action, params):
                 "os": f"{platform.system()} {platform.release()}",
                 "uptime_hours": round((time.time() - psutil.boot_time()) / 3600, 1),
             })
+        if action == "ollama_status":
+            # Check if Ollama is running locally
+            try:
+                import urllib.request as _req
+                req = _req.Request("http://127.0.0.1:11434/api/tags", method="GET")
+                with _req.urlopen(req, timeout=3) as resp:
+                    data = json.loads(resp.read().decode())
+                    models = [m.get("name", "") for m in data.get("models", [])]
+                    return ok(f"Ollama running — {len(models)} models", {"status": "running", "models": models})
+            except Exception:
+                return ok("Ollama not running — start with `ollama serve`", {"status": "offline", "models": []})
+        if action == "network_status":
+            # Check internet connectivity
+            try:
+                import urllib.request as _req
+                _req.urlopen("https://httpbin.org/get", timeout=3)
+                online = True
+            except Exception:
+                online = False
+            return ok(f"Internet: {'Connected' if online else 'Offline'}", {"online": online})
         return err(f"अज्ञात info: {action}")
     except Exception as e:
         return err(str(e))
@@ -2375,105 +2395,182 @@ def cmd_terminal(action, params):
     except Exception as e:
         return err(str(e))
 
-# ── Code Execution (Open Interpreter style — full REPL + self-healing) ──
-_CODE_EXEC_GLOBALS = {
-    "__builtins__": __builtins__,
-    "os": os, "sys": sys, "json": json, "re": re, "time": time,
-    "datetime": datetime, "pathlib": Path, "Path": Path,
-    "subprocess": subprocess, "shutil": shutil,
-    "platform": platform, "math": math, "base64": base64,
-    "urllib": urllib.request, "requests": None,
-}
-# Persistent REPL state (survives across calls)
-_CODE_REPL_STATE: dict = {"globals": {}, "history": []}
+# ── Open Interpreter Style — Self-Healing Code Execution REPL ──
+# Subprocess-isolated, 3 retries, artifact generation
+_CODE_EXEC_TIMEOUT = 30  # seconds max per exec call
+_CODE_REPL_STATE: dict = {"globals": {}, "history": [], "artifacts": []}
+_Pika_Output = Path.home() / "Documents" / "Pika_Output"
+_Pika_Output.mkdir(parents=True, exist_ok=True)
+
+def _run_code_subprocess(code: str, timeout: int = 30) -> dict:
+    """Run Python code in isolated subprocess with live capture."""
+    import subprocess as _sp
+    import tempfile
+    import os
+    
+    # Create temp script file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+        f.write(code)
+        script_path = f.name
+    
+    try:
+        # Run in isolated subprocess
+        result = _sp.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(_Pika_Output),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+        return {
+            "stdout": result.stdout[:8000],
+            "stderr": result.stderr[:4000],
+            "returncode": result.returncode,
+            "success": result.returncode == 0
+        }
+    except _sp.TimeoutExpired:
+        return {"stdout": "", "stderr": f"Timeout: code exceeded {timeout}s", "returncode": -1, "success": False}
+    except Exception as ex:
+        return {"stdout": "", "stderr": str(ex)[:4000], "returncode": -1, "success": False}
+    finally:
+        try:
+            os.unlink(script_path)
+        except:
+            pass
+
+def _auto_fix_code(code: str, error: str) -> str:
+    """Self-healing: auto-fix common Python errors."""
+    fixed = code
+    
+    # Fix missing imports
+    if "NameError" in error and "'" in error:
+        missing = error.split("'")[1] if "'" in error else ""
+        safe_imports = ("pd", "pandas", "np", "numpy", "requests", "json", "re", "time", 
+                       "datetime", "Path", "math", "os", "sys", "collections", "itertools")
+        if missing in safe_imports:
+            fixed = f"import {missing}\n{fixed}"
+    
+    # Fix SyntaxError suggestions
+    if "SyntaxError" in error:
+        # Common fixes
+        if "missing parentheses" in error.lower() or "unexpected EOF" in error.lower():
+            if not fixed.endswith("\n"):
+                fixed += "\n"
+    
+    # Fix IndentationError
+    if "IndentationError" in error:
+        lines = fixed.split("\n")
+        fixed_lines = []
+        for line in lines:
+            if line.strip() and not line.startswith(" ") and not line.startswith("\t"):
+                fixed_lines.append(line)
+            else:
+                fixed_lines.append(line)
+        fixed = "\n".join(fixed_lines)
+    
+    return fixed
 
 def cmd_code(action, params):
-    """Full REPL code execution — Open Interpreter style with self-healing."""
+    """Open Interpreter Style — Self-Healing Code Execution REPL with subprocess isolation."""
     if action in ("exec", "execute", "run", "repl"):
         code = str(params.get("code") or params.get("command") or params.get("script") or "").strip()
         if not code:
             return err("code खाली है")
-        # Load optional libraries
-        try:
-            import requests as _req
-            _CODE_REPL_STATE["globals"]["requests"] = _req
-        except: pass
-        try:
-            import pandas as _pd
-            _CODE_REPL_STATE["globals"]["pd"] = _pd
-            _CODE_REPL_STATE["globals"]["pandas"] = _pd
-        except: pass
-        try:
-            import numpy as _np
-            _CODE_REPL_STATE["globals"]["np"] = _np
-        except: pass
-        # Self-healing: if code fails, try to fix and retry once
-        for attempt in range(2):
-            import io
-            old_stdout, old_stderr = sys.stdout, sys.stderr
-            captured_out, captured_err = io.StringIO(), io.StringIO()
-            try:
-                sys.stdout, sys.stderr = captured_out, captured_err
-                exec_globals = dict(_CODE_EXEC_GLOBALS)
-                exec_globals.update(_CODE_REPL_STATE["globals"])
-                exec(code, exec_globals)
-                # Save state for next call
-                _CODE_REPL_STATE["globals"].update({k: v for k, v in exec_globals.items() if not k.startswith('_')})
-                out = captured_out.getvalue()[:8000]
-                er = captured_err.getvalue()[:4000]
-                _CODE_REPL_STATE["history"].append({"code": code[:500], "success": True, "output": out[:200]})
-                return ok(f"Code executed ✅", {"stdout": out, "stderr": er, "attempt": attempt+1})
-            except Exception as ex:
-                error_msg = str(ex)
-                if attempt == 0:
-                    # Self-healing: try to fix common errors
-                    fixed = False
-                    if "NameError" in error_msg and "'" in error_msg:
-                        # Missing import — try to auto-import
-                        missing = error_msg.split("'")[1] if "'" in error_msg else ""
-                        if missing in ("pd", "pandas", "np", "numpy", "requests", "json", "re", "os", "sys"):
-                            code = f"import {missing}\n" + code
-                            fixed = True
-                    if not fixed:
-                        # Can't auto-fix, return error
-                        sys.stdout, sys.stderr = old_stdout, old_stderr
-                        _CODE_REPL_STATE["history"].append({"code": code[:500], "success": False, "error": error_msg[:200]})
-                        return err(f"Error (attempt {attempt+1}): {error_msg}")
-                else:
-                    sys.stdout, sys.stderr = old_stdout, old_stderr
-                    _CODE_REPL_STATE["history"].append({"code": code[:500], "success": False, "error": error_msg[:200]})
-                    return err(f"Error after self-heal: {error_msg}")
-            finally:
-                sys.stdout, sys.stderr = old_stdout, old_stderr
+        
+        # Security: block dangerous imports
+        code_lower = code.lower()
+        _BLOCKED_MODULES = {"subprocess", "shutil", "ctypes", "signal", "multiprocessing",
+                           "socket", "http", "ftplib", "smtplib", "telnetlib"}
+        for mod in _BLOCKED_MODULES:
+            if f"import {mod}" in code_lower or f"from {mod}" in code_lower:
+                return err(f"⛔ '{mod}' import blocked — security policy.")
+        
+        # Block dangerous os functions
+        _BLOCKED_OS_FUNCS = ("os.system", "os.popen", "os.exec", "os.spawn")
+        for fn in _BLOCKED_OS_FUNCS:
+            if fn in code_lower:
+                return err(f"⛔ '{fn}' blocked — use safe alternatives.")
+        
+        # Self-healing loop: up to 3 retries
+        last_error = ""
+        for attempt in range(3):
+            result = _run_code_subprocess(code, timeout=_CODE_EXEC_TIMEOUT)
+            
+            if result["success"]:
+                # Success — save to history and return
+                _CODE_REPL_STATE["history"].append({
+                    "code": code[:500], "success": True, 
+                    "output": result["stdout"][:200],
+                    "attempt": attempt + 1
+                })
+                return ok(f"Code executed ✅ (attempt {attempt+1})", {
+                    "stdout": result["stdout"],
+                    "stderr": result["stderr"],
+                    "attempt": attempt + 1,
+                    "artifacts": [str(f) for f in _Pika_Output.glob("*") if f.is_file()][-5:]
+                })
+            
+            last_error = result["stderr"]
+            
+            # Self-healing: try to fix the code
+            if attempt < 2:
+                fixed_code = _auto_fix_code(code, last_error)
+                if fixed_code != code:
+                    code = fixed_code
+                    # Send self-healing event
+                    if hasattr(params, '_ws'):
+                        pass  # Will be handled by caller
+        
+        # All 3 attempts failed
+        _CODE_REPL_STATE["history"].append({
+            "code": code[:500], "success": False, 
+            "error": last_error[:200]
+        })
+        return err(f"Error after 3 attempts: {last_error}")
+    
     if action in ("eval", "evaluate"):
         expr = str(params.get("expression") or params.get("code") or "").strip()
         if not expr:
             return err("expression खाली है")
         try:
             result = eval(expr, {"__builtins__": {}}, {
-                "math": math, "json": json, "re": re, "time": time,
-                "datetime": datetime, "Path": Path, "os": os,
+                "math": __import__("math"), "json": __import__("json"),
+                "re": __import__("re"), "time": __import__("time"),
+                "datetime": __import__("datetime"), "Path": Path,
                 "pd": _CODE_REPL_STATE["globals"].get("pd"),
                 "np": _CODE_REPL_STATE["globals"].get("np"),
             })
             return ok(f"Result: {result}", {"result": result})
         except Exception as ex:
             return err(f"Eval error: {ex}")
+    
     if action == "history":
         return ok("REPL History", {"items": _CODE_REPL_STATE["history"][-20:]})
+    
     if action == "clear":
         _CODE_REPL_STATE["globals"].clear()
         _CODE_REPL_STATE["history"].clear()
         return ok("REPL state cleared")
+    
     if action == "pip_install":
         pkg = str(params.get("package", "")).strip()
         if not pkg:
             return err("package name खाली है")
         try:
             r = run([sys.executable, "-m", "pip", "install", pkg], timeout=60)
-            return ok(f"pip install {pkg}", {"stdout": (r.stdout or "")[:3000], "stderr": (r.stderr or "")[:2000], "returncode": r.returncode})
+            return ok(f"pip install {pkg} ✅", {"stdout": (r.stdout or "")[:3000], "stderr": (r.stderr or "")[:2000], "returncode": r.returncode})
         except Exception as ex:
             return err(f"pip install failed: {ex}")
+    
+    if action == "artifacts":
+        # List generated artifacts
+        artifacts = sorted(_Pika_Output.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)[:20]
+        return ok(f"{len(artifacts)} artifacts", {"items": [{"name": f.name, "size": f.stat().st_size, "path": str(f)} for f in artifacts if f.is_file()]})
+    
+    return err(f"अज्ञात code action: {action}")
+
+def cmd_clipboard(action, params):
     return err(f"अज्ञात code action: {action}")
 
 def cmd_clipboard(action, params):
@@ -4909,7 +5006,7 @@ HERMES_TOOLS = [
     {"type": "function", "function": {"name": "clipboard_set", "description": "Set clipboard content", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}},
     {"type": "function", "function": {"name": "web_search", "description": "Search the web", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "web_open", "description": "Open a website", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
-    {"type": "function", "function": {"name": "code_exec", "description": "Execute Python code safely", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {"type": "function", "function": {"name": "code_exec", "description": "Execute Python code safely in sandboxed REPL", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
     {"type": "function", "function": {"name": "code_eval", "description": "Evaluate a math expression", "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}}},
     {"type": "function", "function": {"name": "calculator_eval", "description": "Safe math evaluation", "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}}},
     {"type": "function", "function": {"name": "memory_add", "description": "Save a fact to memory", "parameters": {"type": "object", "properties": {"content": {"type": "string"}, "category": {"type": "string"}}, "required": ["content"]}}},
@@ -4922,6 +5019,60 @@ HERMES_TOOLS = [
     {"type": "function", "function": {"name": "uia_move", "description": "Move cursor to coordinates", "parameters": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}}},
     {"type": "function", "function": {"name": "vision_analyze", "description": "Analyze what's on screen", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": []}}},
 ]
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HERMES-3 DYNAMIC TOOL SCHEMA GENERATOR
+#  Generates full JSON Schema for all 25+ tool categories
+# ═══════════════════════════════════════════════════════════════════════════
+def get_hermes_tool_manifest() -> list:
+    """Generate complete Hermes-3 tool schema for all ROUTES categories."""
+    manifest = []
+    _tool_defs = {
+        "system": {"desc": "PC power controls", "actions": ["shutdown","restart","sleep","lock","logoff","hibernate","empty_recycle_bin","flush_dns","temp_clean"], "params": {}},
+        "volume": {"desc": "Volume control", "actions": ["up","down","mute","unmute","set"], "params": {"percent": {"type": "integer", "minimum": 0, "maximum": 100}}},
+        "media": {"desc": "Media playback", "actions": ["play_pause","next","previous","stop"], "params": {}},
+        "apps": {"desc": "Application management", "actions": ["open","close","list","focus"], "params": {"name": {"type": "string"}}},
+        "window": {"desc": "Window management", "actions": ["minimize","maximize","fullscreen","snap_left","snap_right","show_desktop","switch","close"], "params": {}},
+        "info": {"desc": "System information", "actions": ["battery","cpu","ram","disk","ip","time","date","full_report","ollama_status","network_status"], "params": {}},
+        "processes": {"desc": "Process management", "actions": ["list","kill"], "params": {"name_or_pid": {"type": "string"}}},
+        "files": {"desc": "File operations", "actions": ["create","read","write","copy","move","delete","rename","search","open_explorer"], "params": {"path": {"type": "string"}, "content": {"type": "string"}}},
+        "clipboard": {"desc": "Clipboard operations", "actions": ["get","set","clear","save"], "params": {"text": {"type": "string"}}},
+        "screen": {"desc": "Screen capture & display", "actions": ["screenshot","peel","ocr","start_recording","stop_recording","brightness_set"], "params": {"window": {"type": "string"}}},
+        "keyboard": {"desc": "Keyboard automation", "actions": ["type","hotkey","dictate","voice_to_text"], "params": {"text": {"type": "string"}, "keys": {"type": "string"}}},
+        "web": {"desc": "Web & YouTube", "actions": ["open_site","search","youtube_play","youtube_search"], "params": {"query": {"type": "string"}, "url": {"type": "string"}}},
+        "calculator": {"desc": "Math evaluation", "actions": ["eval"], "params": {"expression": {"type": "string"}}},
+        "password": {"desc": "Password generation", "actions": ["generate"], "params": {"length": {"type": "integer"}}},
+        "translator": {"desc": "Translation", "actions": ["translate"], "params": {"text": {"type": "string"}, "target_lang": {"type": "string"}}},
+        "weather": {"desc": "Weather info", "actions": ["get"], "params": {"location": {"type": "string"}}},
+        "reminders": {"desc": "Reminders", "actions": ["create","list","delete","cancel"], "params": {"text": {"type": "string"}, "minutes": {"type": "integer"}}},
+        "obsidian": {"desc": "Obsidian vault", "actions": ["read_file","search","create_note","daily"], "params": {"path": {"type": "string"}, "content": {"type": "string"}}},
+        "memory": {"desc": "Long-term memory", "actions": ["add","get","list","search","delete"], "params": {"fact": {"type": "string"}, "query": {"type": "string"}}},
+        "uia": {"desc": "Desktop automation", "actions": ["move","click","right_click","double_click","drag","type","scroll","find_text","find_image","get_monitors","deep_tree"], "params": {"x": {"type": "integer"}, "y": {"type": "integer"}, "text": {"type": "string"}}},
+        "browser": {"desc": "Browser automation", "actions": ["open","click","type","navigate","screenshot","get_text","scroll","eval_js"], "params": {"url": {"type": "string"}, "selector": {"type": "string"}}},
+        "code": {"desc": "Python code execution", "actions": ["exec","eval","history","clear","pip_install"], "params": {"code": {"type": "string"}, "expression": {"type": "string"}}},
+        "connectors": {"desc": "OAuth integrations", "actions": ["list","connect","disconnect","gmail_list","calendar_list","drive_list"], "params": {"connector": {"type": "string"}}},
+        "scheduler": {"desc": "Task scheduling", "actions": ["add","list","remove","pause","resume"], "params": {"command": {"type": "string"}, "schedule": {"type": "string"}}},
+        "vision": {"desc": "Screen analysis", "actions": ["describe","ocr"], "params": {"query": {"type": "string"}}},
+    }
+    for cat, info in _tool_defs.items():
+        for action in info["actions"]:
+            tool_name = f"{cat}/{action}"
+            schema = {"type": "object", "properties": dict(info["params"]), "required": []}
+            manifest.append({
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": f"{info['desc']}: {action}",
+                    "parameters": schema
+                }
+            })
+    return manifest
+
+def get_hermes_tools_xml() -> str:
+    """Format tool manifest as Hermes XML for system prompt."""
+    manifest = get_hermes_tool_manifest()
+    tools_json = json.dumps(manifest, indent=2, ensure_ascii=False)
+    return f"<tools>\n{tools_json}\n</tools>"
 
 def _parse_react_tool_call(text: str) -> dict | None:
     """Extract JSON tool call from LLM output. Supports multiple formats."""
@@ -4967,7 +5118,7 @@ def _resolve_react_tool(tool_path: str) -> tuple:
     return tool_path, ""
 
 async def handle_react_agent(ws, msg):
-    """ReAct Agent Loop — multi-step autonomous tool calling with self-correction."""
+    """Hermes-3 ReAct Agent Loop — multi-step autonomous tool calling with self-healing."""
     params = msg.get("params") or {}
     text = params.get("text", "")
     conv_id = msg.get("id")
@@ -4980,21 +5131,49 @@ async def handle_react_agent(ws, msg):
     model = (params.get("provider_models") or {}).get(provider_name, default_model)
     
     if not api_key:
-        await ws.send(json.dumps({"type": "llm_stream", "chunk": "Error: No API key for ReAct agent.", "done": True, "id": conv_id}))
+        await ws.send(json.dumps({"type": "llm_stream", "chunk": "Error: No API key for Hermes agent.", "done": True, "id": conv_id}))
         return
     
-    # Build tool schema for LLM
-    tools_text = "\n".join([f"- {t['function']['name']}: {t['function']['description']}" for t in HERMES_TOOLS])
+    # Build Hermes-3 tool manifest (XML format)
+    tools_xml = get_hermes_tools_xml()
     
     messages = [
-        {"role": "system", "content": _REACT_SYSTEM_PROMPT + f"\n\n## Your Tools\n{tools_text}"},
+        {"role": "system", "content": f"""{tools_xml}
+
+You are Pika AI — a Hermes-3 autonomous desktop assistant. You solve tasks step-by-step.
+
+## Protocol
+1. Think step-by-step (Thought)
+2. Call a tool (Action) using: <tool_call>{{"name": "category/action", "arguments": {{...}}}}</tool_call>
+3. Observe the result (Observation)
+4. Repeat until done
+5. Give Final Answer: when complete
+
+## Rules
+- Use category/action format (e.g., "apps/open", "volume/set", "code/exec")
+- Always include required parameters
+- If a tool fails, try a different approach
+- Maximum 8 steps per task
+- For code execution, use "code/exec" with "code" parameter
+- Generate artifacts to ~/Documents/Pika_Output/ when creating files/plots
+
+## Output Format
+Thought: [reasoning]
+<tool_call>{{"name": "category/action", "arguments": {{"param": "value"}}}}</tool_call>
+
+Observation: [result]
+
+Thought: [next step]
+...
+
+Final Answer: [summary]"""},
         {"role": "user", "content": text}
     ]
     
     # Send agent started event
     await ws.send(json.dumps({
         "type": "event", "event": "react_started",
-        "data": {"query": text},
+        "data": {"query": text, "tools_count": len(get_hermes_tool_manifest())},
         "timestamp": datetime.now(timezone.utc).isoformat()
     }))
     

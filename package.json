@@ -2,29 +2,72 @@
   "name": "pika-ai-assistant",
   "private": true,
   "version": "1.2.1",
-  "description": "Pika AI - Personal AI PC Assistant (Hindi, English, Hinglish)",
+  "description": "Pika AI - Next-Gen Hybrid Desktop Engine (Hermes-3 + Open Interpreter)",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "vite build && electron-builder --win --x64",
+    "electron:build:mac": "vite build && electron-builder --mac --arm64",
+    "electron:build:linux": "vite build && electron-builder --linux --x64",
+    "electron:dist": "electron-builder --win --x64 --publish never",
+    "dist:backend": "python scripts/build_backend.py",
+    "dist:app": "vite build && electron-builder --win --x64 --publish never",
+    "dist": "npm run dist:backend && npm run dist:app",
+    "setup": "npm install && pip install -r requirements.txt",
+    "start": "concurrently \"python pc_bridge.py\" \"vite\""
+  },
+  "build": {
+    "appId": "com.pika.ai.assistant",
+    "productName": "Pika AI Assistant",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist-bin/pc_bridge.exe",
+        "to": "bin/pc_bridge.exe"
+      },
+      {
+        "from": "models",
+        "to": "models"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/pika-icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Pika AI Assistant"
+    }
   },
   "dependencies": {
     "clsx": "2.1.1",
-    "concurrently": "^9.2.4",
-    "cross-env": "^10.1.0",
-    "electron": "^41.7.1",
-    "electron-builder": "^26.15.3",
+    "electron-updater": "^6.3.9",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.22.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "recharts": "^3.9.1",
     "tailwind-merge": "3.4.0",
-    "wait-on": "^9.1.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
@@ -33,9 +76,14 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.1",
+    "concurrently": "^9.2.4",
+    "cross-env": "^10.1.0",
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "7.3.2",
-    "vite-plugin-singlefile": "2.3.0"
+    "vite-plugin-singlefile": "2.3.0",
+    "wait-on": "^9.1.0"
   }
 }

@@ -2,6 +2,10 @@
 
 <div align="center">
 
+<img src="public/pika-icon.png" width="130" height="130" alt="Pika AI Icon" style="border-radius: 28px; box-shadow: 0 10px 30px rgba(0, 240, 255, 0.25);" />
+
+<br/>
+
 [![Version](https://img.shields.io/badge/version-1.2.1-7c3aed.svg?style=for-the-badge)](https://github.com/SudhirDevOps1/pikachu)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg?style=for-the-badge)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?style=for-the-badge&logo=react)](https://react.dev)

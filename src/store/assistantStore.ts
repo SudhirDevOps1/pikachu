@@ -74,6 +74,14 @@ interface AssistantState {
   messages: ChatMessage[];
   isAiThinking: boolean;
 
+  // Conversation Threads (Hermes-style)
+  threads: { id: string; title: string; createdAt: string; updatedAt: string }[];
+  activeThreadId: string | null;
+  createThread: (title?: string) => string;
+  switchThread: (id: string) => void;
+  deleteThread: (id: string) => void;
+  renameThread: (id: string, title: string) => void;
+
   // Voice
   isListening: boolean;
   isSpeaking: boolean;
@@ -90,6 +98,8 @@ interface AssistantState {
   sidebarExpanded: boolean;
   uiMode: import("@/types").UiMode;
   setUiMode: (m: import("@/types").UiMode) => void;
+  onboarded: boolean;
+  setOnboarded: (v: boolean) => void;
 
   // Data
   reminders: Reminder[];
@@ -201,6 +211,11 @@ export const useStore = create<AssistantState>()((set) => ({
     try { localStorage.setItem("pika_uiMode", m); } catch {}
     set({ uiMode: m });
   },
+  onboarded: (() => { try { return localStorage.getItem("pika_onboarded") === "true"; } catch { return false; } })(),
+  setOnboarded: (v) => {
+    try { localStorage.setItem("pika_onboarded", String(v)); } catch {}
+    set({ onboarded: v });
+  },
 
   reminders: [],
   clipboardHistory: [],
@@ -241,6 +256,51 @@ export const useStore = create<AssistantState>()((set) => ({
       messages: s.messages.map((m) => (m.id === id ? { ...m, isStreaming: false } : m)),
     })),
   clearMessages: () => set({ messages: [] }),
+
+  // Conversation Threads
+  threads: (() => {
+    try {
+      const saved = localStorage.getItem("pika_threads");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  })(),
+  activeThreadId: (() => {
+    try { return localStorage.getItem("pika_activeThreadId"); } catch { return null; }
+  })(),
+  createThread: (title?: string) => {
+    const id = generateId();
+    const thread = { id, title: title || `Chat ${new Date().toLocaleDateString("hi-IN")}`, createdAt: nowIso(), updatedAt: nowIso() };
+    set((s) => {
+      const threads = [...s.threads, thread];
+      try { localStorage.setItem("pika_threads", JSON.stringify(threads)); } catch {}
+      try { localStorage.setItem("pika_activeThreadId", id); } catch {}
+      return { threads, activeThreadId: id, messages: [] };
+    });
+    return id;
+  },
+  switchThread: (id: string) => {
+    set((s) => {
+      try { localStorage.setItem("pika_activeThreadId", id); } catch {}
+      // Load messages for this thread from vault
+      return { activeThreadId: id, messages: [] };
+    });
+  },
+  deleteThread: (id: string) => {
+    set((s) => {
+      const threads = s.threads.filter((t) => t.id !== id);
+      try { localStorage.setItem("pika_threads", JSON.stringify(threads)); } catch {}
+      const newActive = s.activeThreadId === id ? (threads[0]?.id || null) : s.activeThreadId;
+      try { localStorage.setItem("pika_activeThreadId", newActive || ""); } catch {}
+      return { threads, activeThreadId: newActive };
+    });
+  },
+  renameThread: (id: string, title: string) => {
+    set((s) => {
+      const threads = s.threads.map((t) => t.id === id ? { ...t, title, updatedAt: nowIso() } : t);
+      try { localStorage.setItem("pika_threads", JSON.stringify(threads)); } catch {}
+      return { threads };
+    });
+  },
   setAiThinking: (v) => set({ isAiThinking: v }),
   setListening: (v) => set({ isListening: v }),
   setSpeaking: (v) => set({ isSpeaking: v }),

@@ -52,3 +52,19 @@
 {"ts": "2026-08-24T10:44:10.833363+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
 {"ts": "2026-08-24T10:59:28.634609+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
 {"ts": "2026-08-24T10:59:28.648471+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:20:45.906760+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:20:45.913755+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:23:10.992282+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:23:11.006727+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:28:17.508488+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:28:17.526455+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:40:10.231062+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:40:10.237056+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:42:40.186687+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:42:40.192595+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:44:49.423024+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:44:49.429027+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:46:47.690445+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:46:47.697445+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}
+{"ts": "2026-08-24T11:48:28.246963+00:00", "event": "injection_blocked", "category": "system", "action": "shutdown", "text": "ignore previous instructions"}
+{"ts": "2026-08-24T11:48:28.252075+00:00", "event": "tool_call", "category": "calculator", "action": "eval", "status": true}

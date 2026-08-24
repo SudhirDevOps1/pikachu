@@ -29,6 +29,7 @@ import { DesktopTitleBar } from "@/components/DesktopTitleBar";
 import { NotesPanel } from "@/components/NotesPanel";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
+import OnboardingWizard from "@/components/OnboardingWizard";
 
 export default function App() {
   const api = useAssistant();
@@ -49,6 +50,8 @@ function AppShell() {
   const uiMode = useStore((s) => s.uiMode);
   const particles = useStore((s) => s.settings.particles);
   const pipMode = useStore((s) => s.settings.pipMode);
+  const onboarded = useStore((s) => s.onboarded);
+  const setOnboarded = useStore((s) => s.setOnboarded);
 
   // Global Ctrl+Space push-to-talk + F fullscreen + Esc exit
   const [isFs, setIsFs] = useState(false);
@@ -83,6 +86,9 @@ function AppShell() {
       <div className="relative flex h-screen flex-col overflow-hidden bg-navy-900">
         <AuroraBackground />
         {particles && <ParticleBackground />}
+
+        {/* First-run onboarding wizard */}
+        {!onboarded && <OnboardingWizard onComplete={() => setOnboarded(true)} />}
 
         {/* Electron-only custom title bar (browser mein null return karta hai) */}
         <div className="relative z-30">

@@ -16,11 +16,19 @@
  * ============================================================================
  */
 
-const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, shell, dialog, nativeImage } = require("electron");
+const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, shell, dialog, nativeImage, crashReporter } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const os = require("os");
+
+// ─── Auto-Update (electron-updater) ───────────────────────────────────────
+let autoUpdater;
+try {
+  autoUpdater = require("electron-updater").autoUpdater;
+} catch (e) {
+  console.log("[pika] electron-updater not available, auto-update disabled");
+}
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const IS_DEV = !app.isPackaged;
@@ -37,6 +45,7 @@ let mainWindow = null;
 let tray = null;
 /** @type {import('child_process').ChildProcess|null} */
 let bridgeProcess = null;
+let bridgeRestartCount = 0;
 let isMiniMode = false;
 let isQuitting = false;
 
@@ -71,18 +80,44 @@ function resolvePythonExecutable() {
 }
 
 function startPythonBridge() {
-  const bridgeScript = path.join(ROOT, "pc_bridge.py");
-  if (!fs.existsSync(bridgeScript)) {
-    console.warn("[pika] pc_bridge.py not found — running in DEMO mode.");
-    return;
+  // Production: use bundled pc_bridge.exe; Development: use Python script
+  let bridgeCmd, bridgeArgs, bridgeCwd;
+  
+  if (!IS_DEV && app.isPackaged) {
+    // Production mode — bundled executable
+    const bundledExe = path.join(process.resourcesPath, "bin", "pc_bridge.exe");
+    const devExe = path.join(ROOT, "dist-bin", "pc_bridge.exe");
+    
+    if (fs.existsSync(bundledExe)) {
+      bridgeCmd = bundledExe;
+      bridgeArgs = [];
+      bridgeCwd = path.dirname(bundledExe);
+      console.log(`[pika] Production mode: ${bridgeCmd}`);
+    } else if (fs.existsSync(devExe)) {
+      bridgeCmd = devExe;
+      bridgeArgs = [];
+      bridgeCwd = path.dirname(devExe);
+      console.log(`[pika] Dev-build mode: ${bridgeCmd}`);
+    } else {
+      console.warn("[pika] pc_bridge.exe not found — running in DEMO mode.");
+      return;
+    }
+  } else {
+    // Development mode — Python script
+    const bridgeScript = path.join(ROOT, "pc_bridge.py");
+    if (!fs.existsSync(bridgeScript)) {
+      console.warn("[pika] pc_bridge.py not found — running in DEMO mode.");
+      return;
+    }
+    bridgeCmd = resolvePythonExecutable();
+    bridgeArgs = [bridgeScript];
+    bridgeCwd = ROOT;
+    console.log(`[pika] Development mode: ${bridgeCmd} ${bridgeScript}`);
   }
 
-  const pythonExe = resolvePythonExecutable();
-  console.log(`[pika] Starting bridge: ${pythonExe} ${bridgeScript}`);
-
   try {
-    bridgeProcess = spawn(pythonExe, [bridgeScript], {
-      cwd: ROOT,
+    bridgeProcess = spawn(bridgeCmd, bridgeArgs, {
+      cwd: bridgeCwd,
       env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1" },
       windowsHide: true,
     });
@@ -106,12 +141,25 @@ function startPythonBridge() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("bridge:status", { running: false, code });
       }
+      // Auto-restart bridge if it crashed (not intentional stop)
+      if (code !== 0 && !isQuitting && bridgeRestartCount < 3) {
+        bridgeRestartCount++;
+        console.log(`[pika] Auto-restarting bridge (attempt ${bridgeRestartCount}/3)...`);
+        setTimeout(() => startPythonBridge(), 2000 * bridgeRestartCount);
+      } else if (bridgeRestartCount >= 3) {
+        console.log("[pika] Bridge restart limit reached. Manual restart required.");
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("bridge:status", { running: false, code, maxRetries: true });
+        }
+      }
     });
 
     bridgeProcess.on("error", (err) => {
       console.error(`[pika] Bridge spawn failed: ${err.message}`);
       bridgeProcess = null;
     });
+    // Reset restart counter on successful start
+    bridgeRestartCount = 0;
   } catch (err) {
     console.error("[pika] Could not start Python bridge:", err);
   }
@@ -134,6 +182,10 @@ function stopPythonBridge() {
 // ─── Tray Icon ──────────────────────────────────────────────────────────────
 /** Simple inline SVG → PNG data URL so we don't need an external asset file. */
 function createTrayIcon() {
+  const iconPath = path.join(__dirname, "icon.png");
+  if (fs.existsSync(iconPath)) {
+    return nativeImage.createFromPath(iconPath);
+  }
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
     <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#00f0ff"/><stop offset="100%" stop-color="#ff00ff"/>
@@ -172,8 +224,10 @@ function createTray() {
 
 // ─── Window Management ──────────────────────────────────────────────────────
 function createMainWindow() {
+  const iconPath = path.join(__dirname, "icon.png");
   mainWindow = new BrowserWindow({
     ...NORMAL_SIZE,
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     show: false,
     frame: false,               // custom title bar — humara apna HUD look
     titleBarStyle: "hidden",
@@ -302,10 +356,38 @@ function registerIpcHandlers() {
 
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // Crash reporter for debugging
+  crashReporter.start({
+    productName: "PikaAI",
+    submitURL: "",  // No remote server — local only
+    uploadToServer: false,
+    compress: true,
+  });
   registerIpcHandlers();
   createMainWindow();
   createTray();
   startPythonBridge();
+
+  // Auto-update check (non-blocking, runs in background)
+  if (autoUpdater && !IS_DEV) {
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+    autoUpdater.on("update-available", (info) => {
+      console.log(`[pika] Update available: ${info.version}`);
+      if (mainWindow) {
+        mainWindow.webContents.send("update:available", { version: info.version });
+      }
+    });
+    autoUpdater.on("download-progress", (progress) => {
+      if (mainWindow) {
+        mainWindow.webContents.send("update:progress", { percent: progress.percent });
+      }
+    });
+    autoUpdater.on("update-downloaded", () => {
+      console.log("[pika] Update downloaded, will install on quit");
+    });
+  }
 
   // Global hotkeys: kahin se bhi Pika ko bulao + always-on dispatch
   globalShortcut.register("CommandOrControl+Shift+Space", () => {
