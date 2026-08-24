@@ -626,7 +626,7 @@ export function useAssistant() {
         if (socket.readyState !== WebSocket.OPEN) {
           socket.close();
         }
-      }, 4000);
+      }, 12000);
 
       socket.onopen = () => {
         window.clearTimeout(failTimer);
