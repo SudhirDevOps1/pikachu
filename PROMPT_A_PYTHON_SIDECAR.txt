@@ -1,0 +1,956 @@
+================================================================================
+ PIKA AI v5.0 — OPTION A: ELECTRON + PACKAGED PYTHON SIDECAR
+ Architecture: Single .exe installer, no Python install required for users.
+ Paste this ENTIRE file to: Claude 3.5 Sonnet / GPT-4o / Gemini 2.0 Flash
+================================================================================
+
+ROLE
+You are a senior Electron packaging engineer and Python cross-compilation expert.
+Your task is to upgrade Pika AI so that users install exactly ONE file:
+  Pika-AI-Setup-1.0.0.exe
+and nothing else. No Python. No pip. No venv. No .bat file. No console windows.
+
+The Python backend (pc_bridge.py) must be frozen into a standalone executable
+using PyInstaller and bundled inside the Electron installer via extraResources.
+Electron main.cjs spawns it privately over stdin/stdout NDJSON (not public WS).
+
+--------------------------------------------------------------------------------
+CRITICAL SAFETY RULE — READ FIRST
+--------------------------------------------------------------------------------
+Do NOT delete any working feature. Implement changes behind feature flags.
+Keep `npm run build` passing at every single step. Never break existing behavior.
+Keep WebSocket mode in pc_bridge.py for manual dev usage.
+
+--------------------------------------------------------------------------------
+CURRENT STATE (what exists right now)
+--------------------------------------------------------------------------------
+- electron/main.cjs spawns `python pc_bridge.py` (requires user Python install)
+- Bridge opens ws://localhost:8765 (exposed to LAN, no auth — SECURITY RISK)
+- Frontend connects via WebSocket from the renderer
+- start.bat / start.sh / start.py launchers required
+- User must run: pip install -r requirements.txt, venv, etc.
+- Cold start: ~3 seconds (Python interpreter startup)
+
+Problems to solve:
+  1. User must install Python           → bundle frozen exe
+  2. PATH/venv errors                   → no Python needed at all
+  3. Bridge on 0.0.0.0:8765 (no auth)  → stdin/stdout private IPC
+  4. Two console windows visible        → --noconsole + windowsHide
+  5. Slow cold start                    → no interpreter startup needed
+  6. .bat launcher UX friction          → single .exe installer
+
+--------------------------------------------------------------------------------
+TARGET ARCHITECTURE
+--------------------------------------------------------------------------------
+
+  Electron Renderer (React 19 + TypeScript)
+        |
+        |  contextBridge IPC  [contextIsolation:true, nodeIntegration:false]
+        v
+  Electron Main Process (Node.js 20 LTS)
+        |
+        |  stdin/stdout NDJSON  [private, NOT exposed on network]
+        v
+  pika-bridge.exe  (PyInstaller --onefile, frozen, no Python needed)
+        |
+        +---> Vosk / Whisper offline STT + wake word detection
+        +---> Edge TTS neural voice + pyttsx3 offline fallback
+        +---> pyautogui desktop automation (keys, mouse, media)
+        +---> File / folder / drive / process / system control
+        +---> OCR (pytesseract), PDF, image processing
+        +---> 7 free LLM providers with streaming + auto-fallback
+        +---> SQLite persistence (reminders, logs, settings, snippets)
+        +---> NLU: 120+ regex patterns (Hindi/English/Hinglish)
+
+  Electron Main ALSO runs internally:
+        Mobile Gateway  [express + ws, 0.0.0.0:3000, PIN authenticated]
+              |
+              v
+        Phone Browser (same WiFi, http://LAN_IP:3000)
+
+  KEY POINT: pika-bridge.exe is NEVER on the network.
+  Phone commands go to Electron gateway, which forwards to bridge via stdin/stdout.
+
+--------------------------------------------------------------------------------
+STEP-BY-STEP IMPLEMENTATION
+--------------------------------------------------------------------------------
+
+=== STEP 1: Add stdio NDJSON mode to pc_bridge.py ===
+
+Keep existing WebSocket main() COMPLETELY INTACT.
+Add a new stdio_loop() coroutine that reads NDJSON from stdin, writes to stdout.
+Switch based on environment variable PIKA_IPC_MODE=stdio.
+
+Add this to pc_bridge.py:
+
+  import sys
+
+  async def stdio_loop():
+      """Private IPC for Electron sidecar. Reads NDJSON, writes NDJSON."""
+      loop = asyncio.get_event_loop()
+      reader = asyncio.StreamReader()
+      await loop.connect_read_pipe(
+          lambda: asyncio.StreamReaderProtocol(reader),
+          sys.stdin.buffer
+      )
+
+      def emit(obj: dict) -> None:
+          line = json.dumps(obj, ensure_ascii=False) + "\n"
+          sys.stdout.buffer.write(line.encode("utf-8"))
+          sys.stdout.buffer.flush()
+
+      emit({"type": "event", "event": "connection_ready",
+            "data": {"server_version": SERVER_VERSION, "mode": "stdio"},
+            "timestamp": datetime.utcnow().isoformat()})
+
+      asyncio.create_task(status_loop_stdio(emit))
+
+      while True:
+          raw = await reader.readline()
+          if not raw:
+              break
+          try:
+              msg = json.loads(raw.decode("utf-8").strip())
+          except Exception:
+              continue
+          asyncio.create_task(handle_stdio_message(msg, emit))
+
+  async def status_loop_stdio(emit):
+      """Push system_status events every 5 seconds over stdout."""
+      try:
+          while True:
+              data = {"cpu": 0, "ram": 0, "battery": None}
+              if psutil:
+                  data["cpu"] = psutil.cpu_percent()
+                  data["ram"] = psutil.virtual_memory().percent
+                  b = psutil.sensors_battery()
+                  if b:
+                      data["battery"] = {"percent": int(b.percent), "plugged": b.power_plugged}
+              emit({"type": "event", "event": "system_status", "data": data,
+                    "timestamp": datetime.utcnow().isoformat()})
+              await asyncio.sleep(5)
+      except Exception:
+          pass
+
+  async def handle_stdio_message(msg: dict, emit) -> None:
+      """Route one NDJSON message and emit the response."""
+      try:
+          mtype = msg.get("type")
+          mid = msg.get("id")
+
+          if mtype == "ping":
+              emit({"type": "pong", "id": mid, "timestamp": datetime.utcnow().isoformat()})
+              return
+
+          if mtype == "tts_speak":
+              params = msg.get("params", {}) or {}
+              await emit_event(mid, await generate_tts(
+                  params.get("text", ""), params.get("voice", DEFAULT_TTS_VOICE)), emit)
+              return
+
+          if mtype == "query":
+              # LLM streaming over stdout
+              async for chunk, provider, done in llm_stream(
+                      ((msg.get("params") or {}).get("text", ""))):
+                  emit({"type": "llm_stream", "chunk": chunk, "provider": provider,
+                        "id": mid, "done": done,
+                        "timestamp": datetime.utcnow().isoformat()})
+              return
+
+          if mtype == "command":
+              cat = msg.get("category")
+              act = msg.get("action")
+              if cat == "_confirm":
+                  cid = (msg.get("params") or {}).get("confirmation_id")
+                  if act == "approve" and cid in PENDING_CONFIRM:
+                      original = PENDING_CONFIRM.pop(cid)
+                      result = route_command(original)
+                  else:
+                      PENDING_CONFIRM.pop(cid, None)
+                      result = {"success": True, "message": "रद्द किया गया।", "data": None}
+              elif (cat, act) in CONFIRM_REQUIRED:
+                  cid = str(uuid.uuid4())
+                  PENDING_CONFIRM[cid] = msg
+                  emit({"type": "response", "status": "confirmation_required",
+                        "message": f"क्या आप {cat}/{act} करना चाहते हैं?",
+                        "confirmation_id": cid, "id": mid,
+                        "timestamp": datetime.utcnow().isoformat()})
+                  return
+              else:
+                  result = route_command(msg)
+
+              emit({"type": "response",
+                    "status": "success" if result.get("success") else "error",
+                    "message": result.get("message", ""),
+                    "data": result.get("data"),
+                    "confirmation_id": None,
+                    "id": mid,
+                    "timestamp": datetime.utcnow().isoformat()})
+      except Exception as e:
+          emit({"type": "response", "status": "error",
+                "message": str(e), "id": msg.get("id"),
+                "timestamp": datetime.utcnow().isoformat()})
+
+  # Modify __main__ block:
+  if __name__ == "__main__":
+      if os.getenv("PIKA_IPC_MODE") == "stdio":
+          asyncio.run(stdio_loop())        # Electron sidecar mode
+      else:
+          asyncio.run(main())              # WebSocket server mode (unchanged)
+
+Test manually before continuing:
+  Windows CMD:
+    set PIKA_IPC_MODE=stdio
+    echo {"id":"t1","type":"command","category":"info","action":"cpu"} | python pc_bridge.py
+  Expected stdout (one JSON line):
+    {"type":"response","status":"success","message":"CPU 34%","data":{"percent":34},"id":"t1",...}
+
+=== STEP 2: Build Python bridge into standalone executable ===
+
+Install PyInstaller in your venv:
+  pip install pyinstaller
+
+Run build (add to package.json as "build:bridge" script):
+  pyinstaller ^
+      --onefile ^
+      --name pika-bridge ^
+      --distpath python-dist ^
+      --workpath .pyi-build ^
+      --specpath .pyi-build ^
+      --noconsole ^
+      --collect-all vosk ^
+      --collect-all edge_tts ^
+      --hidden-import=pyttsx3.drivers ^
+      --hidden-import=pyttsx3.drivers.sapi5 ^
+      --hidden-import=comtypes ^
+      --hidden-import=engineio.async_drivers.threading ^
+      pc_bridge.py
+
+Output: python-dist/pika-bridge.exe
+
+VERIFY on a machine with Python UNINSTALLED (or use a clean VM):
+  python-dist\pika-bridge.exe
+  Must print the Pika banner. No ModuleNotFoundError allowed.
+  If any import fails, add it to --hidden-import or --collect-all.
+
+Cross-platform notes:
+  macOS: add --osx-bundle-identifier com.pika.ai.bridge
+  Linux: chmod +x python-dist/pika-bridge after build
+
+=== STEP 3: Update electron-builder.yml ===
+
+extraResources tells electron-builder to copy files OUTSIDE the asar archive.
+Files inside asar cannot be executed on Windows (permission denied).
+
+Complete electron-builder.yml:
+
+  appId: com.pika.ai.assistant
+  productName: Pika AI
+  copyright: Copyright © 2026 Pika AI
+
+  directories:
+    output: release
+    buildResources: build
+
+  files:
+    - dist/**/*
+    - electron/**/*
+    - package.json
+
+  extraResources:
+    - from: python-dist/pika-bridge.exe
+      to: bridge/pika-bridge.exe
+    - from: models/
+      to: models/
+
+  asar: true
+  compression: maximum
+
+  win:
+    target:
+      - target: nsis
+        arch: [x64]
+      - target: portable
+        arch: [x64]
+    artifactName: "Pika-AI-Setup-${version}.${ext}"
+
+  nsis:
+    oneClick: false
+    perMachine: false
+    allowToChangeInstallationDirectory: true
+    createDesktopShortcut: true
+    createStartMenuShortcut: true
+    shortcutName: Pika AI
+
+  mac:
+    target:
+      - target: dmg
+        arch: [x64, arm64]
+    extraResources:
+      - from: python-dist/pika-bridge
+        to: bridge/pika-bridge
+
+  linux:
+    target: [AppImage, deb]
+    extraResources:
+      - from: python-dist/pika-bridge
+        to: bridge/pika-bridge
+
+=== STEP 4: Rewrite bridge spawning in electron/main.cjs ===
+
+Replace the current resolvePythonExecutable() / startPythonBridge() completely.
+
+Add these functions:
+
+  const { randomUUID } = require("crypto");
+
+  let stdoutBuffer = "";
+  const pending = new Map();
+  let bridgeRestarts = 0;
+  const MAX_BRIDGE_RESTARTS = 5;
+
+  function resolveBridgeBinary() {
+    const exeName = process.platform === "win32" ? "pika-bridge.exe" : "pika-bridge";
+    const packaged = path.join(process.resourcesPath, "bridge", exeName);
+    const dev = path.join(__dirname, "..", "python-dist", exeName);
+    if (app.isPackaged && fs.existsSync(packaged)) return { bin: packaged, mode: "packaged" };
+    if (fs.existsSync(dev)) return { bin: dev, mode: "dev-exe" };
+    return null;
+  }
+
+  function startBridge() {
+    const found = resolveBridgeBinary();
+    const bridgeEnv = {
+      ...process.env,
+      PYTHONIOENCODING: "utf-8",
+      PYTHONUNBUFFERED: "1",
+      PIKA_IPC_MODE: "stdio",
+      PIKA_MODELS_DIR: app.isPackaged
+        ? path.join(process.resourcesPath, "models")
+        : path.join(ROOT, "models"),
+      PIKA_DATA_DIR: app.getPath("userData"),
+    };
+
+    if (found) {
+      logger.info(`[bridge] Starting sidecar: ${found.bin} (${found.mode})`);
+      bridgeProcess = spawn(found.bin, [], {
+        cwd: path.dirname(found.bin),
+        env: bridgeEnv,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } else {
+      // Dev fallback only — never in production
+      const py = process.platform === "win32" ? "python" : "python3";
+      const script = path.join(ROOT, "pc_bridge.py");
+      logger.warn("[bridge] Sidecar not found, falling back to system Python");
+      bridgeProcess = spawn(py, [script], {
+        cwd: ROOT,
+        env: bridgeEnv,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    }
+
+    // Line-buffered stdout → parse NDJSON
+    stdoutBuffer = "";
+    bridgeProcess.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk.toString("utf8");
+      let idx;
+      while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
+        const line = stdoutBuffer.slice(0, idx).trim();
+        stdoutBuffer = stdoutBuffer.slice(idx + 1);
+        if (!line) continue;
+        try { handleBridgeMessage(JSON.parse(line)); }
+        catch { logger.info(`[bridge] ${line}`); }
+      }
+    });
+
+    bridgeProcess.stderr.on("data", (d) => logger.error(`[bridge:err] ${d.toString().trim()}`));
+
+    bridgeProcess.on("close", (code) => {
+      bridgeProcess = null;
+      pending.forEach(({ resolve, timer }) => {
+        clearTimeout(timer);
+        resolve({ type: "response", status: "error", message: "Bridge stopped", data: null });
+      });
+      pending.clear();
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("bridge:status", { running: false, code });
+      }
+
+      if (!isQuitting && bridgeRestarts < MAX_BRIDGE_RESTARTS) {
+        bridgeRestarts++;
+        const delay = Math.min(1000 * Math.pow(2, bridgeRestarts), 30000);
+        logger.info(`[bridge] Restart ${bridgeRestarts}/${MAX_BRIDGE_RESTARTS} in ${delay}ms`);
+        setTimeout(startBridge, delay);
+      } else if (bridgeRestarts >= MAX_BRIDGE_RESTARTS) {
+        dialog.showErrorBox("Pika Bridge",
+          "Bridge crashed too many times. Running in limited demo mode.\nPlease restart the app.");
+      }
+    });
+
+    bridgeProcess.on("error", (err) => logger.error(`[bridge] Spawn error: ${err.message}`));
+  }
+
+  function handleBridgeMessage(msg) {
+    // Forward system events / llm_stream to renderer
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("pika:bridge-event", msg);
+    }
+    // Resolve pending request if this is a response/pong
+    if (msg.id && pending.has(msg.id)) {
+      const { resolve, timer } = pending.get(msg.id);
+      clearTimeout(timer);
+      pending.delete(msg.id);
+      resolve(msg);
+    }
+    // Reset restart counter on successful connection
+    if (msg.event === "connection_ready") {
+      bridgeRestarts = 0;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("bridge:status", { running: true, mode: msg.data?.mode });
+      }
+    }
+  }
+
+  function sendToBridge(msg, timeoutMs = 30000) {
+    return new Promise((resolve) => {
+      if (!bridgeProcess || bridgeProcess.killed) {
+        return resolve({ type: "response", status: "error",
+                        message: "Bridge not running", data: null });
+      }
+      const id = msg.id || randomUUID();
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve({ type: "response", status: "error", message: "Bridge timeout", data: null });
+      }, timeoutMs);
+      pending.set(id, { resolve, timer });
+      try {
+        bridgeProcess.stdin.write(JSON.stringify({ ...msg, id }) + "\n");
+      } catch (err) {
+        clearTimeout(timer);
+        pending.delete(id);
+        resolve({ type: "response", status: "error", message: err.message, data: null });
+      }
+    });
+  }
+
+  function stopBridge() {
+    if (!bridgeProcess) return;
+    try {
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/pid", String(bridgeProcess.pid), "/f", "/t"],
+              { windowsHide: true });
+      } else {
+        bridgeProcess.kill("SIGTERM");
+        setTimeout(() => bridgeProcess?.kill("SIGKILL"), 3000);
+      }
+    } catch {}
+    bridgeProcess = null;
+  }
+
+  // Heartbeat every 15 seconds
+  let heartbeatTimer = null;
+  function startHeartbeat() {
+    heartbeatTimer = setInterval(async () => {
+      if (!bridgeProcess) return;
+      const r = await sendToBridge({ type: "ping" }, 5000);
+      if (r.status === "error") {
+        logger.warn("[bridge] Heartbeat failed, restarting...");
+        stopBridge();
+        startBridge();
+      }
+    }, 15000);
+  }
+
+=== STEP 5: Add IPC handlers in electron/main.cjs ===
+
+Add these inside registerIpcHandlers():
+
+  // Primary command channel — replaces WebSocket
+  ipcMain.handle("pika:command", (_e, msg) => sendToBridge(msg));
+  ipcMain.handle("pika:query",   (_e, msg) => sendToBridge(msg, 60000));
+  ipcMain.handle("pika:tts",     (_e, msg) => sendToBridge(msg, 30000));
+
+  // Bridge management
+  ipcMain.handle("bridge:status", () => ({
+    running: bridgeProcess !== null && !bridgeProcess.killed,
+    mode: app.isPackaged ? "packaged-sidecar" : "dev-sidecar",
+  }));
+  ipcMain.handle("bridge:restart", async () => {
+    stopBridge();
+    bridgeRestarts = 0;
+    await new Promise(r => setTimeout(r, 600));
+    startBridge();
+    return true;
+  });
+
+  // Listen for all bridge push events and forward to renderer
+  // (already handled in handleBridgeMessage via mainWindow.webContents.send)
+
+=== STEP 6: Rewrite electron/preload.cjs ===
+
+Expose the new IPC channel. Keep old window.pika for backward compat.
+Add window.pikaElectron with the new methods.
+
+contextBridge.exposeInMainWorld("pikaElectron", {
+  // Core command/query
+  command:    (msg) => ipcRenderer.invoke("pika:command", msg),
+  query:      (msg) => ipcRenderer.invoke("pika:query",   msg),
+  tts:        (msg) => ipcRenderer.invoke("pika:tts",     msg),
+
+  // Bridge events (system_status, voice_partial, llm_stream, etc.)
+  onBridgeEvent: (cb) => {
+    const h = (_e, msg) => cb(msg);
+    ipcRenderer.on("pika:bridge-event", h);
+    return () => ipcRenderer.removeListener("pika:bridge-event", h);
+  },
+
+  // Bridge management
+  bridgeStatus:  () => ipcRenderer.invoke("bridge:status"),
+  restartBridge: () => ipcRenderer.invoke("bridge:restart"),
+
+  // Window
+  minimize:       () => ipcRenderer.invoke("window:minimize"),
+  maximize:       () => ipcRenderer.invoke("window:maximize"),
+  close:          () => ipcRenderer.invoke("window:close"),
+  toggleMiniMode: () => ipcRenderer.invoke("window:toggle-mini"),
+
+  // System info
+  appInfo: () => ipcRenderer.invoke("app:info"),
+
+  // File dialogs
+  pickFile:   () => ipcRenderer.invoke("dialog:pick-file"),
+  pickFolder: () => ipcRenderer.invoke("dialog:pick-folder"),
+
+  // Shell
+  openExternal: (url) => ipcRenderer.invoke("shell:open-external", url),
+  openPath:     (p)   => ipcRenderer.invoke("shell:open-path", p),
+
+  // Event listeners with cleanup
+  onVoiceHotkey:  (cb) => { const h = () => cb(); ipcRenderer.on("hotkey:voice-toggle", h); return () => ipcRenderer.removeListener("hotkey:voice-toggle", h); },
+  onWindowState:  (cb) => { const h = (_e, s) => cb(s); ipcRenderer.on("window:state", h); return () => ipcRenderer.removeListener("window:state", h); },
+  onMiniMode:     (cb) => { const h = (_e, v) => cb(v); ipcRenderer.on("window:mini-mode", h); return () => ipcRenderer.removeListener("window:mini-mode", h); },
+  onBridgeStatus: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("bridge:status", h); return () => ipcRenderer.removeListener("bridge:status", h); },
+
+  isDesktop: true,
+});
+
+=== STEP 7: Add mobile gateway in electron/services/mobileServer.cjs ===
+
+This is a small Express server that:
+- Serves dist/ on http://0.0.0.0:3000 (phone browser UI)
+- Provides WebSocket for phone commands
+- Requires a 6-digit PIN before accepting commands
+- Forwards authenticated commands to Electron main via a callback
+- Destructive commands trigger a desktop confirmation dialog
+
+'use strict';
+const express = require("express");
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const path = require("path");
+const crypto = require("crypto");
+const os = require("os");
+
+const MOBILE_PORT = 3000;
+const TOKEN_VALIDITY_MS = 24 * 60 * 60 * 1000; // 24h
+
+function generatePin() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function getLanIp() {
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const info of (iface || [])) {
+      if (info.family === "IPv4" && !info.internal) return info.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
+class MobileGateway {
+  constructor({ distDir, onCommand, onShowPin }) {
+    this.distDir = distDir;
+    this.onCommand = onCommand;   // (msg) => Promise<result>
+    this.onShowPin = onShowPin;   // (pin, lanIp) => void
+    this.currentPin = generatePin();
+    this.tokens = new Map();      // token -> expires
+    this.app = null;
+    this.server = null;
+    this.wss = null;
+    this.clients = new Set();
+  }
+
+  _generateToken(pin) {
+    if (pin !== this.currentPin) return null;
+    const token = crypto.randomBytes(32).toString("hex");
+    this.tokens.set(token, Date.now() + TOKEN_VALIDITY_MS);
+    this.currentPin = generatePin();  // rotate PIN
+    return token;
+  }
+
+  _validateToken(token) {
+    const exp = this.tokens.get(token);
+    if (!exp) return false;
+    if (Date.now() > exp) { this.tokens.delete(token); return false; }
+    return true;
+  }
+
+  start() {
+    this.app = express();
+    this.app.use(express.json());
+
+    // Serve React build
+    this.app.use(express.static(this.distDir));
+
+    // Pairing endpoint
+    this.app.post("/api/pair", (req, res) => {
+      const pin = String(req.body?.pin || "").trim();
+      const token = this._generateToken(pin);
+      if (!token) {
+        return res.status(401).json({ error: "Invalid PIN" });
+      }
+      this.onShowPin(null, getLanIp());  // notify main: pin was used
+      res.json({ token, expires: Date.now() + TOKEN_VALIDITY_MS });
+    });
+
+    // Show current PIN (GET — main process calls this to get PIN for QR)
+    this.app.get("/api/pair-info", (req, res) => {
+      res.json({ pin: this.currentPin, ip: getLanIp(), port: MOBILE_PORT });
+    });
+
+    // SPA fallback
+    this.app.get("*", (req, res) => {
+      res.sendFile(path.join(this.distDir, "index.html"));
+    });
+
+    this.server = http.createServer(this.app);
+    this.wss = new WebSocketServer({ server: this.server });
+
+    this.wss.on("connection", (ws) => {
+      let authenticated = false;
+      this.clients.add(ws);
+
+      ws.on("message", async (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw.toString()); } catch { return; }
+
+        if (!authenticated) {
+          if (msg.type === "auth" && this._validateToken(msg.token)) {
+            authenticated = true;
+            ws.send(JSON.stringify({ type: "auth_ok" }));
+          } else {
+            ws.send(JSON.stringify({ type: "auth_fail" }));
+          }
+          return;
+        }
+
+        const result = await this.onCommand(msg);
+        ws.send(JSON.stringify({ ...result, id: msg.id }));
+      });
+
+      ws.on("close", () => this.clients.delete(ws));
+    });
+
+    this.server.listen(MOBILE_PORT, "0.0.0.0", () => {
+      const ip = getLanIp();
+      this.onShowPin(this.currentPin, ip);
+      console.log(`[mobile] Gateway on http://${ip}:${MOBILE_PORT}`);
+    });
+  }
+
+  broadcast(msg) {
+    const str = JSON.stringify(msg);
+    for (const ws of this.clients) {
+      if (ws.readyState === 1) ws.send(str);
+    }
+  }
+
+  stop() {
+    this.wss?.close();
+    this.server?.close();
+  }
+}
+
+module.exports = { MobileGateway, getLanIp };
+
+In electron/main.cjs, start the mobile gateway:
+
+  const { MobileGateway, getLanIp } = require("./services/mobileServer.cjs");
+
+  let mobileGateway = null;
+
+  function startMobileGateway() {
+    const distDir = app.isPackaged
+      ? path.join(__dirname, "..", "dist")
+      : path.join(ROOT, "dist");
+
+    mobileGateway = new MobileGateway({
+      distDir,
+      onCommand: (msg) => sendToBridge(msg),
+      onShowPin: (pin, ip) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("mobile:pair-info", { pin, ip });
+        }
+        if (pin) logger.info(`[mobile] New PIN: ${pin} | http://${ip}:3000`);
+      },
+    });
+    mobileGateway.start();
+
+    // Forward bridge push events to phone clients too
+    const origHandle = handleBridgeMessage;
+    handleBridgeMessage = (msg) => {
+      origHandle(msg);
+      mobileGateway?.broadcast(msg);
+    };
+  }
+
+=== STEP 8: Update src/lib/desktop.ts ===
+
+Add new methods to the PikaDesktopApi interface and the desktop object:
+
+  // Add to interface PikaDesktopApi:
+  command: (msg: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  query:   (msg: Record<string, unknown>) => Promise<void>;
+  tts:     (msg: Record<string, unknown>) => Promise<void>;
+  onBridgeEvent: (cb: (msg: Record<string, unknown>) => void) => () => void;
+
+  // Add to the desktop object:
+  command: async (msg) => {
+    if (window.pikaElectron) return window.pikaElectron.command(msg);
+    // browser fallback: send over WebSocket (for phone browser)
+    return { status: "error", message: "Not in desktop mode" };
+  },
+  query: async (msg) => { window.pikaElectron?.query(msg); },
+  tts:   async (msg) => { window.pikaElectron?.tts(msg); },
+  onBridgeEvent: (cb) => window.pikaElectron?.onBridgeEvent(cb) ?? (() => {}),
+
+=== STEP 9: Update src/hooks/useAssistant.ts ===
+
+Add a branch: if isDesktopApp() → use IPC, else → keep WebSocket (for phone browser).
+
+At the top of the hook add:
+
+  const IS_DESKTOP = typeof window !== "undefined" && Boolean(window.pikaElectron?.isDesktop);
+
+Replace the WebSocket send in processInput with:
+
+  if (IS_DESKTOP) {
+    // Electron IPC path — fast, private, no network
+    window.pikaElectron!.command({ type: "command", ...commandMsg })
+      .then((result) => {
+        store.getState().addToast(result.status === "success"
+          ? { type: "success", message: String(result.message) }
+          : { type: "error", message: String(result.message) });
+      });
+  } else if (ws.current?.readyState === WebSocket.OPEN) {
+    // Browser / phone path — WebSocket to mobile gateway
+    ws.current.send(JSON.stringify(commandMsg));
+  }
+
+For bridge events (system_status, voice_partial, voice_final, etc.), subscribe
+to window.pikaElectron.onBridgeEvent in the hook's useEffect:
+
+  useEffect(() => {
+    if (!IS_DESKTOP) return;
+    const off = desktop.onBridgeEvent((msg: Record<string, unknown>) => {
+      handleMessage(JSON.stringify(msg));  // reuse existing handler
+    });
+    return off;
+  }, []);
+
+=== STEP 10: Update package.json scripts ===
+
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:bridge": "pyinstaller --onefile --name pika-bridge --distpath python-dist --workpath .pyi-build --specpath .pyi-build --noconsole --collect-all vosk --collect-all edge_tts --hidden-import=pyttsx3.drivers --hidden-import=pyttsx3.drivers.sapi5 --hidden-import=comtypes pc_bridge.py",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:3000 && cross-env NODE_ENV=development electron .\"",
+    "release:win":   "npm run build:bridge && npm run build && electron-builder --win --x64",
+    "release:mac":   "npm run build:bridge && npm run build && electron-builder --mac",
+    "release:linux": "npm run build:bridge && npm run build && electron-builder --linux"
+  }
+
+=== STEP 11: Lifecycle cleanup ===
+
+Make sure these are in electron/main.cjs:
+
+  app.on("before-quit", () => {
+    isQuitting = true;
+    stopBridge();
+    mobileGateway?.stop();
+  });
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+    stopBridge();
+    mobileGateway?.stop();
+  });
+  process.on("exit", () => { stopBridge(); mobileGateway?.stop(); });
+  process.on("SIGINT", () => { stopBridge(); mobileGateway?.stop(); process.exit(0); });
+
+=== STEP 12: Archive old launchers ===
+
+Move to archive/python-legacy/ (do NOT delete):
+  start.bat -> archive/python-legacy/start.bat
+  start.sh  -> archive/python-legacy/start.sh
+  start.py  -> archive/python-legacy/start.py
+  test_bridge.py -> archive/python-legacy/test_bridge.py
+
+Keep in root (still needed for dev):
+  pc_bridge.py
+  requirements.txt
+  .env.example
+
+=== STEP 13: GitHub Actions automated release ===
+
+Create .github/workflows/release.yml (complete, production-ready):
+
+  name: Build & Release Pika AI
+  on:
+    push:
+      tags: ["v*"]
+    workflow_dispatch:
+  jobs:
+    build:
+      strategy:
+        matrix:
+          os: [windows-latest, macos-latest, ubuntu-latest]
+      runs-on: ${{ matrix.os }}
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-node@v4
+          with: { node-version: 20, cache: npm }
+        - uses: actions/setup-python@v5
+          with: { python-version: "3.12" }
+        - name: Install Python deps
+          run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+        - name: Build Python bridge
+          run: npm run build:bridge
+        - name: Install Node deps
+          run: npm ci
+        - name: Build renderer
+          run: npm run build
+        - name: Build Electron installer
+          run: npx electron-builder --publish always
+          env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        - uses: actions/upload-artifact@v4
+          with:
+            name: pika-${{ matrix.os }}
+            path: release/*
+
+  Result: pushing `git tag v1.0.0 && git push origin v1.0.0` auto-produces
+  downloadable installers on the GitHub Releases page.
+
+--------------------------------------------------------------------------------
+SECURITY RULES (MANDATORY — DO NOT SKIP)
+--------------------------------------------------------------------------------
+
+1. contextIsolation: true, nodeIntegration: false, webSecurity: true — FIXED.
+2. Bridge NEVER on network. All phone access via authenticated mobile gateway.
+3. Phone pairing: 6-digit PIN + HMAC token (24h expiry).
+4. Path safety: keep existing BLOCKED_PATTERNS + home-relative resolution.
+5. Two-phase confirmation: destructive commands enforced in main/bridge, not renderer.
+6. Safe eval: keep existing AST-based calculator in Python. No eval() ever.
+7. API keys only in main process (process.env). Never logged, never sent to renderer.
+8. Rate limiting: keep existing sliding window in Python bridge.
+9. Code signing before distribution (signtool / codesign + notarytool).
+
+--------------------------------------------------------------------------------
+FEATURE PARITY — NOTHING REMOVED
+--------------------------------------------------------------------------------
+
+Every existing feature must work after this migration:
+- 120+ voice commands (Hindi/English/Hinglish)
+- Wake word: "hey assistant", "hey pika", "पिका"
+- System power with confirmation
+- 40+ app launches
+- Volume/media control
+- File CRUD with natural language paths
+- Drive listing with real usage
+- Clipboard, screenshot, processes, reminders, scheduler
+- System info, network, weather, crypto, NASA, world clock
+- Calculator, translator, password, QR, OCR, PDF, image tools
+- LLM chat with 7 providers + streaming + fallback
+- Custom AI providers
+- Neural HUD orb (4 rings, 8 nodes, radar, ResizeObserver — never clipped)
+- Dual-color gradient theme + shuffle
+- Standard + Futurist mode
+- Live PiP activity monitor
+- Desktop title bar, tray, global hotkey, mini mode
+- Mobile access over LAN (now PIN-authenticated)
+- Demo mode when bridge unavailable
+- All 25 docs/ remain valid and interlinked
+
+--------------------------------------------------------------------------------
+TEST MATRIX — ALL MUST PASS BEFORE SHIPPING
+--------------------------------------------------------------------------------
+
+BUILD
+[ ] npm run build         → 0 TypeScript errors
+[ ] npm run build:bridge  → python-dist/pika-bridge.exe exists
+[ ] npm run release:win   → release/Pika-AI-Setup-*.exe exists
+
+CLEAN MACHINE (Python NOT installed)
+[ ] Installer runs cleanly
+[ ] App opens, green bridge dot within 5 seconds
+[ ] "cpu usage" returns a real value
+[ ] "desktop par file banao test.txt" creates the file
+[ ] Drive explorer shows real C:\ data
+[ ] Voice button works + partial transcript visible
+[ ] "hey assistant" wake word triggers
+[ ] TTS speaks in Hindi
+
+LIFECYCLE
+[ ] Kill pika-bridge.exe in Task Manager → app auto-restarts it
+[ ] Quit from tray → NO orphan pika-bridge.exe in Task Manager
+[ ] Launch app twice → second exits, first focuses
+[ ] Close window → hides to tray, does not quit
+
+SECURITY
+[ ] Port 8765 NOT open on LAN (netstat -an | findstr 8765 shows nothing)
+[ ] Phone on same WiFi must enter PIN before any command
+[ ] Unpaired WS connection gets auth_fail
+[ ] "delete file C:\Windows\System32\x.dll" is blocked
+[ ] API keys absent from renderer DevTools console
+
+UI
+[ ] Neural orb complete at 1920x1080, 1366x768, 1280x600
+[ ] Theme picker recolors entire UI instantly
+[ ] Futurist ↔ Standard toggle works
+[ ] PiP pops out of browser window
+
+MOBILE
+[ ] http://LAN_IP:3000 loads on phone
+[ ] Commands work after PIN pairing
+[ ] Destructive command shows desktop confirmation first
+
+--------------------------------------------------------------------------------
+DELIVERABLES — COMPLETE FILES, NO PLACEHOLDERS
+--------------------------------------------------------------------------------
+
+ 1. pc_bridge.py           (stdio_loop + handle_stdio_message added)
+ 2. electron/main.cjs      (sidecar spawn, NDJSON IPC, heartbeat, cleanup)
+ 3. electron/preload.cjs   (pikaElectron API + cleanup functions)
+ 4. electron/services/mobileServer.cjs  (Express + WS + PIN pairing)
+ 5. electron-builder.yml   (extraResources for bridge + models)
+ 6. package.json           (build:bridge + release scripts + "main" field)
+ 7. .github/workflows/release.yml  (automated cross-platform builds)
+ 8. src/lib/desktop.ts     (command/query/tts/onBridgeEvent added)
+ 9. src/hooks/useAssistant.ts  (IPC in desktop, WS on phone browser)
+10. archive/python-legacy/  (start.bat, start.sh, start.py, test_bridge.py)
+11. docs/A-SIDECAR-ARCHITECTURE.md  (new architecture doc)
+12. docs/A-PACKAGING-GUIDE.md  (build steps, PyInstaller, signing, CI)
+13. docs/A-MOBILE-GATEWAY.md  (PIN pairing, security, phone UX)
+14. docs/00-START-HERE.md  (updated flowchart and links)
+15. docs/02-ARCHITECTURE.md  (updated to show sidecar pattern)
+
+Every file must be complete. No "// rest unchanged". No "// TODO".
+npm run build must pass clean.
+
+================================================================================
+END OF OPTION A PROMPT
+================================================================================

@@ -2950,7 +2950,7 @@ def cmd_screen(action, params):
         if action in ("stop_recording", "stop_record"):
             try:
                 if not globals().get("_rec_flag"):
-                    return err("No active recording")
+                    return ok("No active recording — kuch record nahi ho raha tha", {"info": "already_stopped"})
                 globals()["_rec_flag"] = False
                 import time as _t; _t.sleep(0.6)
                 p = globals().get("_rec_path","")

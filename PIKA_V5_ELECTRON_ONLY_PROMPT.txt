@@ -1,0 +1,825 @@
+================================================================================
+ PIKA AI v5.0 — PRODUCTION DESKTOP MIGRATION PROMPT (2027 GRADE)
+ Copy this ENTIRE file to Claude 3.5 Sonnet / GPT-4o / Gemini 2.0 Flash / DeepSeek
+================================================================================
+
+ROLE:
+You are a Principal Electron Architect + Python Packaging Expert + Node Native
+Module Specialist + 2027 AI Trends Analyst.
+
+You will upgrade Pika AI from a "user must install Python" hybrid into a
+professional single-installer desktop product.
+
+--------------------------------------------------------------------------------
+ CRITICAL SAFETY RULE — READ FIRST
+--------------------------------------------------------------------------------
+
+DO NOT delete the current working Python implementation until complete
+feature-parity tests pass. Implement everything behind service interfaces and
+migrate one service at a time using feature flags. Keep the existing app
+buildable and runnable at every single step.
+
+Never break `npm run build`. Never remove a working feature.
+
+--------------------------------------------------------------------------------
+ CURRENT PROBLEM
+--------------------------------------------------------------------------------
+
+Current app: electron/main.cjs spawns `python pc_bridge.py` which opens
+ws://localhost:8765. Frontend (React) connects over WebSocket.
+
+Problems for END USERS:
+- User must install Python 3.10+ manually
+- "python is not recognized" PATH errors on Windows
+- venv creation fails on restricted machines
+- start.bat / start.sh / start.py launcher friction
+- pip install requirements.txt takes 2-5 minutes and can fail
+- Vosk model download (45 MB) may fail on slow networks
+- Two visible console windows
+- Antivirus flags spawning python.exe
+- Slow cold start (~3s)
+
+SECURITY PROBLEM (must be fixed):
+- pc_bridge.py binds to 0.0.0.0:8765 with NO authentication
+- Anyone on the same WiFi can send shutdown/delete/kill commands
+- This must NOT ship to production as-is
+
+--------------------------------------------------------------------------------
+ CHOOSE YOUR PATH — TWO OPTIONS
+--------------------------------------------------------------------------------
+
+################################################################################
+##  OPTION A (RECOMMENDED — DO THIS FIRST)                                    ##
+##  ELECTRON + PACKAGED PYTHON SIDECAR                                        ##
+################################################################################
+
+This is the BEST option for Pika because Pika's core value is offline
+Hindi/Hinglish voice recognition, wake word, macros, OCR and deep desktop
+automation — areas where Python libraries are far more mature than Node.
+
+### A.1 TARGET ARCHITECTURE
+
+    Electron Renderer (React 19 + TypeScript)
+          |
+          |  secure contextBridge IPC  (contextIsolation: true)
+          v
+    Electron Main Process (Node.js 20 LTS)
+          |
+          |  private local IPC  (stdin/stdout NDJSON — NOT public WebSocket)
+          v
+    Packaged pika-bridge.exe   (PyInstaller onefile, NO Python install needed)
+          |
+          +--> Vosk / Whisper offline STT + wake word
+          +--> Edge TTS + pyttsx3 offline fallback
+          +--> Desktop automation (pyautogui / nut equivalent)
+          +--> File / drive / process / system control
+          +--> OCR (pytesseract), PDF, image tools
+          +--> LLM provider routing (7 free providers)
+          +--> SQLite persistence
+
+    Electron Main ALSO runs:
+          Mobile Gateway (express + ws on 0.0.0.0:3000, AUTHENTICATED)
+                |
+                v
+          Phone Browser (same WiFi) -> http://LAN_IP:3000
+
+Key point: the privileged Python bridge is NEVER exposed on the network.
+Only the authenticated Electron gateway is. Phone talks to Electron; Electron
+talks to Python over private stdin/stdout.
+
+### A.2 HOW IT WORKS — STEP BY STEP
+
+STEP A2.1 — Freeze Python into an executable
+
+Create `build-bridge.py` or use a shell command. Use PyInstaller (simplest) or
+Nuitka (faster, smaller, harder). PyInstaller command:
+
+    pyinstaller --onefile --name pika-bridge ^
+        --distpath python-dist ^
+        --workpath .pyi-build ^
+        --specpath .pyi-build ^
+        --noconsole ^
+        --hidden-import=vosk ^
+        --hidden-import=edge_tts ^
+        --hidden-import=pyttsx3.drivers ^
+        --hidden-import=pyttsx3.drivers.sapi5 ^
+        --hidden-import=comtypes ^
+        --collect-all vosk ^
+        --collect-all edge_tts ^
+        pc_bridge.py
+
+Output:
+
+    python-dist/pika-bridge.exe        (Windows)
+    python-dist/pika-bridge            (macOS / Linux)
+
+Notes:
+- Use --noconsole on Windows so no black console window appears
+- --collect-all vosk is REQUIRED or the model loader will fail at runtime
+- On macOS also add: --osx-bundle-identifier com.pika.ai.bridge
+- Verify it runs standalone: `python-dist\pika-bridge.exe` should print the
+  Pika banner with NO Python installed on a clean test VM
+
+Add an npm script to package.json:
+
+    "build:bridge": "pyinstaller --onefile --name pika-bridge --distpath python-dist --workpath .pyi-build --specpath .pyi-build --noconsole --collect-all vosk --collect-all edge_tts pc_bridge.py",
+    "build:all": "npm run build:bridge && npm run build && electron-builder --win --x64"
+
+STEP A2.2 — Bundle the executable into the Electron installer
+
+In `electron-builder.yml`:
+
+    extraResources:
+      - from: python-dist/pika-bridge.exe
+        to: bridge/pika-bridge.exe
+      - from: models/
+        to: models/
+
+    # Cross-platform variant
+    win:
+      extraResources:
+        - from: python-dist/pika-bridge.exe
+          to: bridge/pika-bridge.exe
+    mac:
+      extraResources:
+        - from: python-dist/pika-bridge
+          to: bridge/pika-bridge
+    linux:
+      extraResources:
+        - from: python-dist/pika-bridge
+          to: bridge/pika-bridge
+
+IMPORTANT: Do NOT put the exe inside `files:` — it must be in `extraResources`
+so it stays OUTSIDE the asar archive and remains executable.
+
+STEP A2.3 — Auto-start the bridge from Electron
+
+In `electron/main.cjs`, replace the current `resolvePythonExecutable()` +
+`spawn(pythonExe, [bridgeScript])` logic with:
+
+    function resolveBridgeBinary() {
+      const exeName = process.platform === "win32"
+        ? "pika-bridge.exe"
+        : "pika-bridge";
+
+      // Packaged: inside resources/bridge/
+      // Dev:      inside python-dist/
+      const packaged = path.join(process.resourcesPath, "bridge", exeName);
+      const dev = path.join(__dirname, "..", "python-dist", exeName);
+
+      if (app.isPackaged && fs.existsSync(packaged)) return packaged;
+      if (fs.existsSync(dev)) return dev;
+      return null;   // will fall back to system python in dev
+    }
+
+    function startBridge() {
+      const bin = resolveBridgeBinary();
+
+      if (bin) {
+        bridgeProcess = spawn(bin, [], {
+          cwd: path.dirname(bin),
+          env: {
+            ...process.env,
+            PYTHONIOENCODING: "utf-8",
+            PYTHONUNBUFFERED: "1",
+            PIKA_MODELS_DIR: app.isPackaged
+              ? path.join(process.resourcesPath, "models")
+              : path.join(ROOT, "models"),
+            PIKA_DATA_DIR: app.getPath("userData"),
+            PIKA_IPC_MODE: "stdio",          // tell Python to use stdin/stdout
+          },
+          windowsHide: true,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } else {
+        // DEV FALLBACK ONLY — never in production
+        const py = process.platform === "win32" ? "python" : "python3";
+        bridgeProcess = spawn(py, [path.join(ROOT, "pc_bridge.py")], { ... });
+      }
+
+      attachBridgeHandlers();
+    }
+
+STEP A2.4 — Private NDJSON IPC (replace local WebSocket)
+
+Python must support a `PIKA_IPC_MODE=stdio` mode where it reads
+newline-delimited JSON from stdin and writes newline-delimited JSON to stdout.
+
+Request (Electron -> Python), one JSON object per line:
+
+    {"id":"uuid","type":"command","category":"files","action":"create_file","params":{"path":"test.txt"}}
+
+Response (Python -> Electron), one JSON object per line:
+
+    {"id":"uuid","type":"response","status":"success","message":"फाइल बनी","data":null}
+
+Events (Python -> Electron, no id):
+
+    {"type":"event","event":"voice_partial","data":{"text":"chrome kh"}}
+    {"type":"event","event":"system_status","data":{"cpu":45,"ram":62}}
+
+Node side (main.cjs) — line buffering is MANDATORY:
+
+    let stdoutBuffer = "";
+    bridgeProcess.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk.toString("utf8");
+      let idx;
+      while ((idx = stdoutBuffer.indexOf("\n")) >= 0) {
+        const line = stdoutBuffer.slice(0, idx).trim();
+        stdoutBuffer = stdoutBuffer.slice(idx + 1);
+        if (!line) continue;
+        try { handleBridgeMessage(JSON.parse(line)); }
+        catch { console.log("[bridge]", line); }   // plain log line
+      }
+    });
+
+Pending request map with timeout:
+
+    const pending = new Map();
+
+    function sendToBridge(msg, timeoutMs = 30000) {
+      return new Promise((resolve, reject) => {
+        if (!bridgeProcess || bridgeProcess.killed) {
+          return resolve({ status: "error", message: "Bridge not running" });
+        }
+        const id = msg.id || randomUUID();
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve({ status: "error", message: "Bridge timeout" });
+        }, timeoutMs);
+
+        pending.set(id, { resolve, timer });
+        bridgeProcess.stdin.write(JSON.stringify({ ...msg, id }) + "\n");
+      });
+    }
+
+    function handleBridgeMessage(msg) {
+      if (msg.id && pending.has(msg.id)) {
+        const { resolve, timer } = pending.get(msg.id);
+        clearTimeout(timer);
+        pending.delete(msg.id);
+        resolve(msg);
+        return;
+      }
+      // Events / llm_stream -> forward to renderer
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("pika:bridge-event", msg);
+      }
+    }
+
+Python side must add to pc_bridge.py (keep WebSocket mode too, do NOT remove it):
+
+    async def stdio_loop():
+        """NDJSON over stdin/stdout for Electron private IPC."""
+        loop = asyncio.get_event_loop()
+        reader = asyncio.StreamReader()
+        await loop.connect_read_pipe(
+            lambda: asyncio.StreamReaderProtocol(reader), sys.stdin
+        )
+
+        def emit(obj):
+            sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+
+        emit({"type": "event", "event": "connection_ready",
+              "data": {"server_version": SERVER_VERSION, "mode": "stdio"}})
+
+        asyncio.create_task(status_loop_stdio(emit))
+
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            try:
+                msg = json.loads(line.decode("utf-8").strip())
+            except Exception:
+                continue
+            asyncio.create_task(handle_stdio_message(msg, emit))
+
+    if __name__ == "__main__":
+        if os.getenv("PIKA_IPC_MODE") == "stdio":
+            asyncio.run(stdio_loop())
+        else:
+            asyncio.run(main())          # existing WebSocket server
+
+STEP A2.5 — Health monitoring, auto-restart, crash backoff
+
+    let bridgeRestarts = 0;
+    const MAX_RESTARTS = 5;
+
+    bridgeProcess.on("close", (code) => {
+      bridgeProcess = null;
+      mainWindow?.webContents.send("bridge:status", { running: false, code });
+
+      if (!isQuitting && bridgeRestarts < MAX_RESTARTS) {
+        bridgeRestarts++;
+        const delay = Math.min(1000 * 2 ** bridgeRestarts, 30000);
+        setTimeout(startBridge, delay);
+      } else if (bridgeRestarts >= MAX_RESTARTS) {
+        dialog.showErrorBox(
+          "Pika Bridge",
+          "Bridge repeatedly crashed. App will run in limited mode."
+        );
+      }
+    });
+
+    // Heartbeat every 15s
+    setInterval(async () => {
+      const r = await sendToBridge({ type: "ping" }, 5000);
+      if (r.status === "error") { stopBridge(); startBridge(); }
+    }, 15000);
+
+Reset `bridgeRestarts = 0` on a successful `connection_ready` event.
+
+STEP A2.6 — Guaranteed cleanup (no orphan processes)
+
+    function stopBridge() {
+      if (!bridgeProcess) return;
+      try {
+        if (process.platform === "win32") {
+          spawn("taskkill", ["/pid", String(bridgeProcess.pid), "/f", "/t"]);
+        } else {
+          bridgeProcess.kill("SIGTERM");
+          setTimeout(() => bridgeProcess?.kill("SIGKILL"), 3000);
+        }
+      } catch {}
+      bridgeProcess = null;
+    }
+
+    app.on("before-quit", () => { isQuitting = true; stopBridge(); });
+    app.on("will-quit", () => { globalShortcut.unregisterAll(); stopBridge(); });
+    process.on("exit", stopBridge);
+    process.on("SIGINT", () => { stopBridge(); process.exit(0); });
+
+### A.3 USER EXPERIENCE (THE WHOLE POINT)
+
+User downloads and runs ONE file:
+
+    Pika-AI-Setup-1.0.0.exe
+
+User does NOT need to install:
+    - Python
+    - pip
+    - venv
+    - requirements.txt
+    - Vosk package
+    - Edge TTS package
+    - Any .bat / .sh launcher
+
+App opens instantly. Bridge starts silently in the background. Wake word works.
+
+### A.4 ADVANTAGES
+
+    + Full feature support — nothing is lost
+    + No Python PATH problems ever again
+    + No .bat / .sh launcher needed
+    + Electron auto-starts and auto-restarts the backend
+    + Vosk offline wake word runs in the background continuously
+    + Packaging is relatively reliable and reproducible
+    + Entire Python ecosystem stays intact (OCR, PDF, automation, AI libs)
+    + Can still run `python pc_bridge.py` manually in dev for fast iteration
+
+### A.5 DISADVANTAGES (AND HOW TO MITIGATE)
+
+    - Installer becomes 100-250 MB
+        Mitigate: UPX compression, exclude unused libs via --exclude-module,
+        ship Vosk model as optional first-run download
+
+    - Two processes running (Electron + bridge)
+        Mitigate: strict lifecycle handling in A2.6, heartbeat in A2.5
+
+    - Lifecycle handling must be correct or orphan processes remain
+        Mitigate: taskkill /t on Windows, SIGTERM then SIGKILL on Unix
+
+    - Antivirus may flag an unsigned PyInstaller binary
+        Mitigate: code sign both the .exe and the installer.
+        Windows: signtool with an OV/EV certificate
+        macOS: codesign + notarytool
+        Also submit to Microsoft for false-positive review if needed
+
+### A.6 BUILD PIPELINE
+
+    npm run build:bridge     # PyInstaller -> python-dist/pika-bridge.exe
+    npm run build            # tsc + vite -> dist/index.html
+    npm run electron:win     # electron-builder -> release/Pika-AI-Setup.exe
+
+Add to package.json:
+
+    "scripts": {
+      "dev": "vite",
+      "build": "tsc -b && vite build",
+      "build:bridge": "pyinstaller --onefile --name pika-bridge --distpath python-dist --workpath .pyi-build --specpath .pyi-build --noconsole --collect-all vosk --collect-all edge_tts pc_bridge.py",
+      "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:3000 && cross-env NODE_ENV=development electron .\"",
+      "electron:win": "npm run build && electron-builder --win --x64",
+      "release:win": "npm run build:bridge && npm run build && electron-builder --win --x64",
+      "release:mac": "npm run build:bridge && npm run build && electron-builder --mac",
+      "release:linux": "npm run build:bridge && npm run build && electron-builder --linux"
+    }
+
+### A.7 GITHUB ACTIONS — AUTOMATED RELEASE
+
+Create `.github/workflows/release.yml`:
+
+    name: Build & Release Pika AI
+    on:
+      push:
+        tags: ["v*"]
+      workflow_dispatch:
+
+    jobs:
+      build:
+        strategy:
+          matrix:
+            os: [windows-latest, macos-latest, ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions/setup-node@v4
+            with: { node-version: 20, cache: npm }
+          - uses: actions/setup-python@v5
+            with: { python-version: "3.12" }
+
+          - name: Install Python deps
+            run: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt pyinstaller
+
+          - name: Build Python bridge
+            run: npm run build:bridge
+
+          - name: Install Node deps
+            run: npm ci
+
+          - name: Build renderer
+            run: npm run build
+
+          - name: Build Electron installer
+            run: npx electron-builder --publish always
+            env:
+              GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          - uses: actions/upload-artifact@v4
+            with:
+              name: pika-${{ matrix.os }}
+              path: release/*
+
+Result: pushing tag `v1.0.0` produces downloadable installers on the GitHub
+Releases page for Windows, macOS and Linux.
+
+################################################################################
+##  OPTION B (LATER / OPTIONAL)                                               ##
+##  PURE ELECTRON — REMOVE PYTHON ENTIRELY                                    ##
+################################################################################
+
+Only pursue this AFTER Option A ships and is stable. Do it service-by-service
+behind feature flags, never in one big rewrite.
+
+### B.1 TARGET ARCHITECTURE
+
+Layer 0 — Electron Main (Node.js 20 LTS)
++---------------------------------------------------------------------+
+|  BrowserWindow (frameless HUD)                                      |
+|  Tray + GlobalShortcut (Ctrl+Shift+Space)                           |
+|  IPC Handlers (ipcMain.handle)                                      |
+|  +--------------------------------------------------------------+  |
+|  |  SERVICES (electron/services/*.cjs) — ALL Node.js            |  |
+|  |  |- systemService.cjs    -> systeminformation, os            |  |
+|  |  |- powerService.cjs     -> shutdown/restart/lock            |  |
+|  |  |- appService.cjs       -> shell.openExternal / exec        |  |
+|  |  |- volumeService.cjs    -> loudness npm                     |  |
+|  |  |- clipboardService.cjs -> electron clipboard + clipboardy  |  |
+|  |  |- screenService.cjs    -> screenshot-desktop               |  |
+|  |  |- fileService.cjs      -> fs/promises + chokidar           |  |
+|  |  |- driveService.cjs     -> drivelist / node-disk-info       |  |
+|  |  |- processService.cjs   -> ps-list + taskkill               |  |
+|  |  |- networkService.cjs   -> ip + public IP via fetch         |  |
+|  |  |- voiceService.cjs     -> vosk npm OR whisper-node         |  |
+|  |  |- ttsService.cjs       -> edge-tts port / say              |  |
+|  |  |- llmService.cjs       -> native fetch streaming           |  |
+|  |  |- dbService.cjs        -> better-sqlite3                   |  |
+|  |  +- mobileServer.cjs     -> express + ws (authenticated)     |  |
+|  +--------------------------------------------------------------+  |
+|  Preload -> contextBridge.exposeInMainWorld("pikaElectron")         |
++---------------------------------------------------------------------+
+
+### B.2 LIBRARY MAPPING — Python -> Node.js (2027 BEST CHOICES)
+
+    Python (OLD)             Node.js (NEW)
+    ------------------------------------------------------------------
+    psutil                   systeminformation@5.x + os
+    pyautogui                @nut-tree/nut-js@4.x  (robotjs is stale)
+    pyperclip                electron clipboard + clipboardy@4.x
+    websockets (server)      ws@8.x + express@5.x (mobile gateway only)
+    requests (LLM)           native fetch (Node 20 built-in, streaming)
+    vosk (STT)               vosk@0.3.45 npm OR whisper-node
+                             OR @xenova/transformers (Whisper ONNX/WebGPU)
+    edge-tts                 edge-tts npm port OR
+                             microsoft-cognitiveservices-speech-sdk
+    pyttsx3                  say@0.16.x
+    pygetwindow              active-win@8.x
+    screenshot               screenshot-desktop@2.x
+    sqlite3                  better-sqlite3@9.x (3x faster, synchronous)
+    plyer notifications      node-notifier@10.x
+    pytesseract              tesseract.js@5.x (WASM, no native install)
+    PyPDF2                   pdf-lib@1.x
+    Pillow                   sharp@0.33.x
+
+### B.3 WHAT IS HARD IN PURE ELECTRON (BE HONEST ABOUT THIS)
+
+    Feature                     Difficulty in Node
+    ------------------------------------------------------------------
+    Offline Hindi STT           HARD — native binding packaging pain
+    Background wake word        HARD — renderer throttling, mic lifecycle
+    Global mouse/key recording  HARD — native rebuild + signing
+    Macro replay timing         MEDIUM — cross-platform inconsistency
+    Volume / brightness         MEDIUM — platform-specific APIs
+    OCR                         MEDIUM — tesseract.js WASM is slower
+    Process priority            MEDIUM — OS-specific
+    WiFi control                MEDIUM — different commands per OS
+
+Removing Python does not remove complexity — it MOVES the complexity into
+native Node modules, electron-rebuild, and binary signing.
+
+### B.4 MIGRATION ORDER (EASIEST FIRST)
+
+    1. clipboardService     (trivial)
+    2. fileService          (fs/promises)
+    3. systemService        (systeminformation)
+    4. driveService         (drivelist)
+    5. networkService       (fetch)
+    6. appService           (shell + exec)
+    7. dbService            (better-sqlite3)
+    8. llmService           (fetch streaming)
+    9. screenService        (screenshot-desktop)
+   10. processService       (ps-list)
+   11. volumeService        (loudness)
+   12. ttsService           (edge-tts port)
+   13. voiceService         (LAST — hardest)
+
+Keep Python running for anything not yet migrated. Use a feature flag:
+
+    const USE_NODE_SERVICE = {
+      clipboard: true,
+      file: true,
+      system: true,
+      voice: false,      // still Python
+      automation: false, // still Python
+    };
+
+--------------------------------------------------------------------------------
+ SECURITY — MANDATORY FOR BOTH OPTIONS
+--------------------------------------------------------------------------------
+
+SEC-1. Electron hardening (never change these):
+    contextIsolation: true
+    nodeIntegration: false
+    webSecurity: true
+    sandbox: false          (preload needs limited Node)
+    setWindowOpenHandler -> shell.openExternal + deny
+
+SEC-2. Never expose the privileged bridge on the network.
+    BAD:  HOST = "0.0.0.0"   (anyone on WiFi can shutdown your PC)
+    GOOD: stdin/stdout private IPC, or 127.0.0.1 only
+
+SEC-3. Mobile gateway must require pairing:
+
+    Phone            Electron            Desktop User
+      |  pair req  ->   |
+      |                 |  show 6-digit PIN / QR ->  |
+      |  <---------------- user reads PIN ---------- |
+      |  PIN       ->   |
+      |  <- token (24h expiry, HMAC signed)
+      |  cmd+token ->   |  validate -> forward to bridge
+      Destructive commands ALWAYS require desktop-side confirmation.
+
+SEC-4. Path safety (keep existing logic in whichever language):
+    const BLOCKED = [
+      /^[a-zA-Z]:\\Windows/i, /^[a-zA-Z]:\\Program Files/i,
+      /^\/System/i, /^\/usr/i, /^\/etc/i, /^\/bin/i
+    ];
+    Resolve relative paths against app.getPath("home").
+
+SEC-5. Two-phase commit for destructive actions — enforced in MAIN process,
+    not just the renderer. shutdown, restart, hibernate, files/delete,
+    processes/kill, disk/cleanup_temp, macros/play, scheduler/clear_all.
+
+SEC-6. Safe expression evaluation. NEVER eval() or new Function() on user input.
+    Python: AST whitelist (already implemented — keep it)
+    Node:   mathjs limited scope, or port the same AST approach
+
+SEC-7. Rate limiting — sliding window 5/sec, 60/min, 500/hour, in main process.
+
+SEC-8. Secrets: API keys live in main process only (electron-store encrypted or
+    process.env). Never send keys to renderer. Never log them.
+
+SEC-9. Code signing before public distribution:
+    Windows: signtool sign /fd SHA256 /tr <timestamp> Pika-AI-Setup.exe
+    macOS:   codesign --deep --options runtime + xcrun notarytool submit
+
+--------------------------------------------------------------------------------
+ VOICE ENGINE STRATEGY (2027 ANALYSIS)
+--------------------------------------------------------------------------------
+
+Vosk
+    + Small (45 MB Hindi), fast on CPU, natural streaming, low-end PC friendly
+    - Weaker on Hinglish and noisy input (~65-85%)
+
+Whisper.cpp / faster-whisper
+    + Much better Hindi/English/Hinglish, good noise handling, auto language ID
+    - Bigger model (75 MB tiny to 1.5 GB large), more CPU/RAM, higher latency
+
+Recommended hybrid — let the user choose in Settings:
+
+    Voice Engine:
+      (o) Auto            -> pick based on detected CPU/RAM
+      ( ) Vosk Fast       -> low-end machines
+      ( ) Whisper Accurate-> high accuracy
+      ( ) Browser Speech  -> zero install fallback
+
+Desktop wake word should run in the Python sidecar (Option A) because the
+renderer can be throttled/hidden and lose the microphone.
+
+Mobile voice path:
+    Phone getUserMedia -> authenticated WS -> Electron gateway -> bridge STT
+    (or use the phone browser's own Web Speech API as a fallback)
+
+--------------------------------------------------------------------------------
+ FEATURE PARITY CHECKLIST — NOTHING MAY BE REMOVED
+--------------------------------------------------------------------------------
+
+[ ] 120+ voice commands (Hindi / English / Hinglish)
+[ ] Wake word: "hey assistant", "hey pika", "पिका"
+[ ] Voice shortcuts (screenshot, lock, volume, mute, show desktop)
+[ ] System power: shutdown, restart, sleep, lock, logoff, hibernate
+[ ] App launcher: 40+ apps mapped
+[ ] Website launcher: 30+ sites
+[ ] Volume: up / down / set / mute
+[ ] Media: play-pause / next / previous
+[ ] Files: create, read, write, rename, delete, list, open explorer
+[ ] Natural language paths: "desktop par file banao test.txt"
+[ ] Drive listing with usage bars (C:\, D:\)
+[ ] Clipboard: save / history / clear
+[ ] Screenshot + screen recording
+[ ] Processes: list / kill with confirmation
+[ ] Reminders and timers with live countdown + notification
+[ ] System info: CPU, RAM, disk, battery, IP, time, full report
+[ ] Calculator (safe AST), Translator, Password generator, QR code, OCR
+[ ] Weather (Open-Meteo), Crypto (CoinGecko), NASA APOD, World Clock
+[ ] Network telemetry with live traffic bars
+[ ] Live PiP activity monitor (Document Picture-in-Picture API)
+[ ] Futurist HUD Neural Core orb — 4 rings, 8 nodes, radar sweep,
+    ResizeObserver sizing, NEVER clipped on any screen height
+[ ] Dual-color gradient theme picker + shuffle + custom hex, live CSS vars
+[ ] Standard mode AND Futurist mode toggle
+[ ] Custom AI providers (name, base URL, model, API key) + health check
+[ ] Per-provider model name override
+[ ] Mobile access over LAN (now authenticated)
+[ ] Desktop title bar, tray, global hotkey, mini always-on-top mode
+[ ] Demo mode when bridge unavailable
+[ ] All 25 docs/ files remain interlinked with header/footer nav
+
+--------------------------------------------------------------------------------
+ IMPLEMENTATION ORDER FOR OPTION A
+--------------------------------------------------------------------------------
+
+STEP 1  Audit pc_bridge.py. List every handler. Confirm build passes today.
+STEP 2  Add PIKA_IPC_MODE=stdio NDJSON loop to pc_bridge.py.
+        KEEP the existing WebSocket main() intact for backward compatibility.
+STEP 3  Verify manually:
+            set PIKA_IPC_MODE=stdio
+            echo {"id":"1","type":"command","category":"info","action":"cpu"} | python pc_bridge.py
+        Must print one JSON line back.
+STEP 4  Add build:bridge npm script. Run it. Test python-dist/pika-bridge.exe
+        on a machine WITHOUT Python installed.
+STEP 5  Rewrite electron/main.cjs bridge section:
+            resolveBridgeBinary(), startBridge(), stopBridge(),
+            NDJSON line buffering, pending map, heartbeat, restart backoff.
+STEP 6  Add IPC handlers:
+            ipcMain.handle("pika:command", (e, msg) => sendToBridge(msg))
+            ipcMain.handle("pika:query",   (e, msg) => sendToBridge(msg))
+            ipcMain.handle("pika:tts",     (e, msg) => sendToBridge(msg))
+STEP 7  Update electron/preload.cjs — expose command/query/tts +
+        onBridgeEvent listener with unsubscribe function. Keep old window.pika
+        API working for backward compatibility.
+STEP 8  Update src/lib/desktop.ts — add sendCommand, sendQuery, sendTTS,
+        onBridgeEvent. Keep browser no-op fallbacks.
+STEP 9  Update src/hooks/useAssistant.ts:
+            if (isDesktopApp())  -> use IPC (window.pikaElectron.command)
+            else                 -> use WebSocket to mobile gateway
+            always               -> keep demoMode fallback
+STEP 10 Add electron/services/mobileServer.cjs — express serves dist/,
+        ws handles phone commands, PIN pairing + HMAC token required.
+STEP 11 Update electron-builder.yml extraResources for the bridge + models.
+STEP 12 Run the full test matrix (below). Fix everything.
+STEP 13 Add .github/workflows/release.yml.
+STEP 14 Move legacy launchers to archive/ (do NOT delete):
+            archive/python-legacy/start.bat
+            archive/python-legacy/start.sh
+            archive/python-legacy/start.py
+            archive/python-legacy/test_bridge.py
+        Keep pc_bridge.py in root — it is now the sidecar source.
+STEP 15 Update docs: 00, 02, 05, 18 minimum. Add a new file
+        docs/25-PACKAGING-DISTRIBUTION.md describing PyInstaller +
+        electron-builder + code signing + GitHub Releases.
+
+--------------------------------------------------------------------------------
+ TEST MATRIX — ALL MUST PASS
+--------------------------------------------------------------------------------
+
+BUILD
+[ ] npm run build                 -> 0 TypeScript errors
+[ ] npm run build:bridge          -> python-dist/pika-bridge.exe created
+[ ] npm run electron:dev          -> window opens, bridge connects
+[ ] npm run release:win           -> release/Pika-AI-Setup-*.exe created
+
+CLEAN MACHINE (most important)
+[ ] Install the .exe on a VM with NO Python installed
+[ ] App launches, green bridge dot appears within 5 seconds
+[ ] "cpu usage" returns a real percentage
+[ ] "desktop par file banao test.txt" actually creates the file
+[ ] Drive explorer shows real C:\ usage
+[ ] Voice button works (Vosk model auto-downloads or is bundled)
+[ ] Wake word "hey assistant" triggers
+[ ] TTS speaks in Hindi
+
+LIFECYCLE
+[ ] Kill pika-bridge.exe in Task Manager -> app auto-restarts it
+[ ] Quit from tray -> NO orphan pika-bridge.exe remains in Task Manager
+[ ] Launch app twice -> second instance exits, first focuses
+[ ] Close window -> hides to tray, does not quit
+
+UI / RESPONSIVE
+[ ] Neural orb complete and centered at 1920x1080
+[ ] Neural orb complete and centered at 1366x768
+[ ] Neural orb complete and centered at 1280x600 (short screen)
+[ ] Theme picker recolors orb, charts, buttons, chat bubbles instantly
+[ ] Futurist <-> Standard mode toggle works both ways
+[ ] Live PiP pops out of the browser window (Chrome/Edge)
+
+MOBILE
+[ ] Phone on same WiFi opens http://LAN_IP:3000
+[ ] Pairing PIN required before any command executes
+[ ] Unpaired phone is rejected
+[ ] Destructive command from phone requires desktop confirmation
+
+SECURITY
+[ ] Port scan: 8765 is NOT open to the LAN
+[ ] "delete file C:\Windows\System32\x.dll" is blocked
+[ ] "calculate __import__('os').system('dir')" is rejected
+[ ] API keys never appear in renderer devtools or logs
+
+--------------------------------------------------------------------------------
+ DELIVERABLES
+--------------------------------------------------------------------------------
+
+ 1. pc_bridge.py with added stdio NDJSON mode (WebSocket mode preserved)
+ 2. electron/main.cjs with sidecar spawn, NDJSON IPC, heartbeat, cleanup
+ 3. electron/preload.cjs with new command/query/tts/onBridgeEvent API
+ 4. electron/services/mobileServer.cjs with PIN pairing + HMAC tokens
+ 5. electron-builder.yml with extraResources for bridge + models
+ 6. package.json scripts: build:bridge, release:win, release:mac, release:linux
+ 7. .github/workflows/release.yml for automated cross-platform builds
+ 8. src/lib/desktop.ts updated
+ 9. src/hooks/useAssistant.ts updated (IPC in desktop, WS on mobile)
+10. archive/python-legacy/ with old launchers
+11. docs/25-PACKAGING-DISTRIBUTION.md (new)
+12. docs/00, 02, 05, 18 updated for the new architecture
+13. npm run build passes with zero errors
+
+--------------------------------------------------------------------------------
+ HARD RULES
+--------------------------------------------------------------------------------
+
+- Bina kuchh hataye — no existing feature may be removed
+- No placeholders, no "// TODO", no "rest of code unchanged" — write every line
+- contextIsolation stays true, nodeIntegration stays false
+- No eval() on user input, ever
+- Path blocklist preserved
+- Two-phase confirmation preserved
+- All animations preserved: aurora, particles, network nodes, radar sweep,
+  scanline, scramble text, typewriter, animated counters
+- Fully responsive on every screen size and device
+- Hinglish tone preserved in UI strings and docs
+- Production grade, 2027 ready
+
+--------------------------------------------------------------------------------
+ OUTPUT FORMAT
+--------------------------------------------------------------------------------
+
+1. First, a short analysis: what you will change and why (Option A).
+2. Then generate EVERY file completely, in this order:
+       pc_bridge.py (stdio addition)
+       electron/main.cjs
+       electron/preload.cjs
+       electron/services/mobileServer.cjs
+       electron-builder.yml
+       package.json
+       .github/workflows/release.yml
+       src/lib/desktop.ts
+       src/hooks/useAssistant.ts
+       docs/25-PACKAGING-DISTRIBUTION.md
+3. Finally, print the exact commands to build and the test checklist.
+
+================================================================================
+ END OF PROMPT
+================================================================================
