@@ -557,12 +557,25 @@ Groq, Gemini, Mistral, Cerebras, DeepSeek, OpenRouter, Z.ai, Nvidia, Together, O
 | Issue | Fix |
 |---|---|
 | `python not recognized` | Reinstall Python with "Add to PATH" |
-| `ws://8765` not connected | Run `python pc_bridge.py`; check firewall |
+| `ws://8765` not connected / `BRIDGE OFF` | Run `python pc_bridge.py`; cold-start needs 12s (PyInstaller exe). UI shows `BRIDGE STARTING…` then `LIVE` |
+| `WinError 10013` / `Failed to fetch` / `Failed to establish a new connection` | **Windows Firewall ne `pc_bridge.exe` ko block kiya** — API key sahi hone par bhi `api.mistral.ai:443` fail. **Abhi turant fix (1 min):** |
 | Vosk not loaded | `pip install vosk` + model in `models/hi/` |
 | Edge TTS silent | Check internet; fallback to piper |
 | `npm run build` fails | `npm install` again; Node 18+ required |
 | Volume set not working | `pip install pycaw` for exact volume control |
 | PiP not staying on top | Run as admin for `SetWindowPos` permission |
+
+> ### 🔥 `WinError 10013` — Abhi turant fix (1 min) — tabhi download ke baad user ka `Fetch live models` kaam karega
+> 1. **Admin PowerShell** kholo — Start → `PowerShell` → **Run as Administrator**
+> 2. **Paste karo** (dono commands):
+> ```powershell
+> netsh advfirewall firewall add rule name="Pika AI Bridge" dir=out action=allow program="C:\Users\DELL\AppData\Local\Programs\pika-ai-assistant\resources\bin\pc_bridge.exe" enable=yes
+> netsh advfirewall firewall add rule name="Pika AI Bridge Python" dir=out action=allow program="C:\Users\DELL\AppData\Local\Programs\Python\Python312\python.exe" enable=yes
+> ```
+> 3. Pika band karke dobara kholo → Settings → Mistral `Use` → `Fetch live models` → ab `OK` ayega, `Failed to fetch` gayab
+> 4. Agar phir bhi aaye to **Windows Defender → Allow an app** me `pc_bridge.exe` ko ✅ karo
+>
+> *Note:* Naya `Pika AI Assistant Setup 1.2.1.exe (410 MB)` ye rule auto-try karta hai, par Admin bina manual step chahiye ho sakta hai. Python fallback (`resources/pc_bridge.py`) already `python.exe` ke allow se kaam karega.
 
 ---
 
