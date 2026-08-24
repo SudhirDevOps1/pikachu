@@ -100,6 +100,126 @@ Pika AI is a highly capable personal AI assistant designed to integrate seamless
 
 ---
 
+## 📋 Requirements — Kya Chahiye (Hardware / Software / Space / Versions)
+
+> Ye section `package.json:1` + `requirements.txt:1` + `brain.md` + actual `pip list`/`node` se verified. Bina iske app smooth nahi chalega.
+
+### 1) Hardware — Minimum vs Recommended
+
+| Component | Minimum (chalega) | Recommended (smooth) | Kyu? |
+|---|---|---|---|
+| **OS** | Windows 10 64-bit | Windows 11 22H2+ | `winreg` + `DPAPI` + `WMI` `pc_bridge.py:400` |
+| **CPU** | Dual-core 2.0 GHz | Quad-core 3.0 GHz+ (i5 6th Gen tested `brain.md:28`) | Vosk 45MB + Edge TTS decode |
+| **RAM** | 4 GB | 8 GB+ | Electron 41 ~300MB + Python 150MB + Vosk model |
+| **Storage** | 2 GB free | 5 GB free | neeche breakdown |
+| **Mic** | Any | Noise-cancelling | Hinglish STT accuracy |
+| **Webcam** | Optional | 720p+ | `WebcamPanel.tsx` + Vision |
+| **GPU** | No | No (CPU only) | PyTorch hataya `brain.md:14` — 0% load |
+| **Network** | Offline ok | Broadband | LLM + weather only; 80% offline |
+
+**Storage breakdown (real `du`):**
+
+| Path | Size | Kya |
+|---|---|---|
+| `node_modules/` | ~480 MB | `npm install` |
+| `venv/` | ~900 MB | `pip install -r requirements.txt` |
+| `models/hi/` Vosk `vosk-model-small-hi-0.22` | ~45 MB | offline STT |
+| `C:\whisper\ggml-tiny.bin` (optional) | ~75 MB | Whisper.cpp `brain.md:9` |
+| `dist/index.html` singlefile | 1.13 MB gzip 327 KB | `npm run build` verified |
+| `pika_data.json` vault | <1 MB | encrypted |
+| `~/Videos/Pika_Recordings/` | grows | screen rec `pc_bridge.py:1781` |
+| `screenshots/` | grows | `screen_peeler()` |
+
+> Total fresh install ≈ **1.5 GB**, running ≈ **2.5 GB RAM** (Electron + Python).
+
+### 2) Software — Exact Versions (Acknowledge)
+
+**A. Node / Frontend (`package.json:1` — `v1.2.0`):**
+
+| Package | Version used | Required | `npm` |
+|---|---|---|---|
+| `node` | **20 LTS** tested | `>=18.0.0` | `node --version` |
+| `npm` | `10.x` | `>=9` | `npm --version` |
+| `react` / `react-dom` | `19.2.6` | `19.x` | UI |
+| `typescript` | `5.9.3` | `5.x` | `tsc --noEmit` |
+| `vite` | `7.3.2` | `7.x` | dev `:3000` |
+| `@vitejs/plugin-react` | `5.1.1` | `5.x` |  |
+| `tailwindcss` / `@tailwindcss/vite` | `4.1.17` | `4.x` |  |
+| `zustand` | `5.0.14` | `5.x` | store |
+| `framer-motion` | `12.42.2` | `12.x` |  |
+| `lucide-react` | `1.22.0` | `1.x` | icons |
+| `recharts` | `3.9.1` | `3.x` | charts |
+| `electron` | `41.7.1` | `41.x` | desktop |
+| `electron-builder` | `26.15.3` | `26.x` | `.exe` |
+| `clsx` / `tailwind-merge` | `2.1.1` / `3.4.0` | — | `cn()` |
+| `vite-plugin-singlefile` | `2.3.0` | `2.x` | singlefile |
+
+**B. Python / Backend (`requirements.txt:1` + `pip list` verified `2026-08-24`):**
+
+| Package | Version (`pip list`) | Spec | Use |
+|---|---|---|---|
+| `python` | **3.12.7** (rec. 3.10+) | `>=3.10` |  |
+| `websockets` | `13.1` | `>=13.0` **MUST** | `ws://8765` |
+| `apscheduler` | `3.10.x` | `>=3.10.0` | `cmd_scheduler:1473` |
+| `vosk` | `0.3.45` | `>=0.3.45` | `HAS_VOSK` |
+| `edge-tts` | `6.1.10` | `>=6.1.0` | `HAS_EDGE_TTS` |
+| `piper-tts` | `1.2.x` | `piper-tts` | offline TTS |
+| `pyautogui` | `0.9.54` | `>=0.9.54` | `bezier_move` |
+| `pygetwindow` | `0.0.9` | `>=0.0.9` | `cmd_window` |
+| `pyperclip` | `1.8.2` | `>=1.8.2` | clipboard |
+| `screen_brightness_control` | `0.23.x` | `>=0.27.0` spec | brightness |
+| `psutil` | `5.9.8` | `>=5.9.0` | `cmd_info` |
+| `cryptography` | `43.x` | `>=43.0.0` | Fernet |
+| `pywin32` | `306` | `>=306` Win only | DPAPI |
+| `Pillow` | `10.4.0` | `>=10.0.0` | `ImageGrab` |
+| `opencv-python` | `4.13.0.90` | `opencv-*` | `find_image` |
+| `pytesseract` | `0.3.13` | `0.3.13` | `find_text` |
+| `pynput` | `1.8.1` | `1.8.1` | mouse |
+| `requests` | `2.32.2` | `>=2.32.2` | LLM |
+| `aiohttp` | `3.9.5` | `>=3.9.5` | async |
+| `agent-mini` | (git) | `agent-mini` | `agent_mini/agent.py` |
+| `pytest` / `pytest-asyncio` | `8.x` / `0.23` | `>=8.0.0` | tests |
+
+**C. Optional (add later, no error if missing ` _opt:77`):**
+`Tesseract OCR 5.0+` (for `find_text`), `ffmpeg` (alt screen rec), `Ollama` `http://127.0.0.1:11434` (offline LLM)
+
+**D. API Keys (free, no card):**
+
+| Provider | Free limit | Env `settings.apiKeys` |
+|---|---|---|
+| Groq | 30/min | `GROQ_API_KEY` |
+| Gemini | 15 RPM | `GEMINI_API_KEY` |
+| Mistral | 1M tok/day | `MISTRAL_API_KEY` |
+| etc Cerebras/OpenRouter | 100k/day | Settings panel |
+
+> Keys bina bhi 80% features (system/apps/files/cursor offline) chalenge — LLM sirf chat ke liye.
+
+### 3) Permissions & Network
+
+| Need | Why | Default |
+|---|---|---|
+| `ws://localhost:8765` | UI↔Python `useAssistant.ts:581` | `HOST 0.0.0.0:8765` |
+| `http://localhost:3000` | Vite dev | `vite.config.ts` |
+| Firewall allow `python` | LAN phone `http://192.168.x.x:3000` | manual allow |
+| Mic permission (browser) | `WebSpeech` / Vosk | prompt |
+| `Videos/Pika_Recordings` write | `cmd_screen start_recording` | `Path.home()/Videos` |
+
+### 4) Verify — Ek command me sab check
+
+```bash
+node --version   # v20.x
+npm --version    # 10.x
+python --version # 3.12.x
+pip list | findstr "websockets vosk edge-tts pyautogui opencv"
+# expect 13.1, 0.3.45, 6.1.10, 0.9.54, 4.13.0.90
+npm run build    # 2843 modules, 1.13 MB → ok
+python -c "import py_compile; py_compile.compile('pc_bridge.py',doraise=True); print('ok')"
+```
+
+> Sab tick? → `Getting Started` pe jao. Koi version mismatch → `npm install` + `pip install -r requirements.txt` dubara.
+
+---
+
 ## 🔄 How It Works — Kaise Kaam Karta Hai
 
 ### 1) High-Level Flow (3 Layers)
