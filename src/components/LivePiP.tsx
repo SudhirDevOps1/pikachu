@@ -32,27 +32,30 @@ export function LivePiP() {
 
   return (
     <>
-      {/* Floating launcher — DRAGGABLE so it never permanently blocks any widget.
-          Default sits at the extreme bottom-right corner below all cards. */}
+      {/* Floating launcher — DRAGGABLE like settings, never overlaps */}
       <motion.button
         drag
         dragMomentum={false}
-        whileHover={{ scale: 1.1, rotate: 5 }}
-        whileTap={{ scale: 0.95 }}
+        dragElastic={0.14}
+        whileHover={{ scale: 1.08, rotate: 3 }}
+        whileTap={{ scale: 0.96 }}
+        whileDrag={{ scale: 1.12 }}
         onClick={() => setOpen((v) => !v)}
-        title="Live PiP मॉनिटर — drag करके कहीं भी रखें"
-        className="fixed bottom-2 right-2 z-50 flex h-11 w-11 cursor-grab items-center justify-center rounded-full text-white shadow-lg active:cursor-grabbing sm:h-12 sm:w-12"
+        onDoubleClick={popOut}
+        title="Live PiP — drag karo, click kholo, double-click bahar (Chrome/Edge)"
+        className="fixed bottom-2 right-2 z-50 flex h-11 w-11 cursor-grab items-center justify-center rounded-full text-white shadow-lg active:cursor-grabbing sm:h-12 sm:w-12 border border-white/10"
         style={{
           background: `linear-gradient(135deg, var(--accent), var(--secondary-accent))`,
-          boxShadow: `0 0 20px rgba(var(--accent-rgb),0.5)`,
+          boxShadow: `0 0 20px rgba(var(--accent-rgb),0.5), 0 8px 24px rgba(0,0,0,0.35)`,
         }}
       >
         <PictureInPicture2 size={18} />
         {activityLog.length > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white">
+          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white animate-pulse">
             {Math.min(activityLog.length, 9)}
           </span>
         )}
+        <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-1.5 py-0.5 text-[7px] font-bold tracking-widest text-white/70 opacity-0 group-hover:opacity-100">DRAG</span>
       </motion.button>
 
       <AnimatePresence>
@@ -66,13 +69,16 @@ export function LivePiP() {
             className="glass-strong fixed bottom-36 right-4 z-40 flex h-[380px] w-[290px] flex-col rounded-2xl p-4 shadow-2xl"
             style={{ border: `1px solid rgba(var(--accent-rgb),0.3)` }}
           >
-            <div className="mb-2 flex items-center justify-end gap-2">
-              <button onClick={popOut} title="Browser से बाहर निकालें" className="text-white/40 hover:text-cyan-400">
-                <ExternalLink size={15} />
-              </button>
-              <button onClick={() => setOpen(false)} className="text-white/40 hover:text-white">
-                <X size={16} />
-              </button>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold tracking-widest text-white/30"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> DRAGGABLE • POP-OUT</span>
+              <span className="flex items-center gap-1.5">
+                <button onClick={popOut} title="Browser se bahar — OS window (Chrome/Edge)" className="flex items-center gap-1 rounded-full bg-[var(--accent)] px-2.5 py-1 text-[10px] font-bold text-black hover:opacity-90">
+                  <ExternalLink size={12} /> बाहर निकालो
+                </button>
+                <button onClick={() => setOpen(false)} className="text-white/40 hover:text-white">
+                  <X size={16} />
+                </button>
+              </span>
             </div>
 
             {/* This subtree gets physically moved into the Document PiP window */}

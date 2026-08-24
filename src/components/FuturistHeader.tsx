@@ -22,21 +22,25 @@ export function FuturistHeader() {
   }, []);
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6">
-      <div className="flex items-center gap-3">
+    <header className="relative flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6 backdrop-blur-md border-b border-white/10">
+      <div className="absolute inset-0 bg-gradient-to-r from-[rgba(var(--accent-rgb),0.08)] via-transparent to-[rgba(6,182,212,0.08)] pointer-events-none" />
+      <div className="absolute bottom-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-[rgba(var(--accent-rgb),0.6)] to-transparent pointer-events-none" />
+      <div className="flex items-center gap-3 relative">
         <motion.div
-          whileHover={{ rotate: 12, scale: 1.05 }}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-lg"
+          whileHover={{ rotate: 12, scale: 1.08 }}
+          animate={{ boxShadow: ["0 0 18px rgba(var(--accent-rgb),0.35)","0 0 28px rgba(var(--accent-rgb),0.55)","0 0 18px rgba(var(--accent-rgb),0.35)"] }}
+          transition={{ duration: 2.2, repeat: Infinity }}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-lg relative overflow-hidden"
           style={{
             background: `linear-gradient(135deg, var(--accent), #06b6d4)`,
-            boxShadow: `0 0 24px rgba(var(--accent-rgb),0.4)`,
           }}
         >
-          <Zap size={22} className="text-white" fill="white" />
+          <motion.span className="absolute inset-0" style={{ background: `linear-gradient(120deg, transparent, rgba(255,255,255,0.35), transparent)` }} animate={{ x: ["-100%","200%"] }} transition={{ duration: 2.8, repeat: Infinity, repeatDelay: 1.2, ease: "linear" }} />
+          <Zap size={22} className="text-white relative" fill="white" />
         </motion.div>
         <div>
-          <div className="text-lg font-bold leading-none text-white tracking-wide">PIKA AI</div>
-          <div className="text-[10px] text-white/40">व्यक्तिगत AI असिस्टेंट</div>
+          <div className="text-lg font-bold leading-none text-white tracking-[0.12em] flex items-center gap-2">PIKA AI <motion.span className="h-1 w-1 rounded-full bg-cyan-400" animate={{ opacity:[1,0.2,1] }} transition={{ duration:1, repeat: Infinity }} /></div>
+          <div className="text-[10px] text-white/40 tracking-widest">व्यक्तिगत AI असिस्टेंट • FUTURIST</div>
         </div>
       </div>
 

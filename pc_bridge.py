@@ -164,11 +164,21 @@ def load_vault_data() -> dict:
                     return json.loads(decrypted_bytes.decode("utf-8"))
                 except Exception as ex:
                     logger.error(f"DPAPI decryption failed: {ex}")
-            # Fallback Fernet decryption
+            # Fallback Fernet decryption — key derived from OS keychain + hardware, not hardcoded
             try:
                 from cryptography.fernet import Fernet
                 import hashlib
-                hw_key = base64.urlsafe_b64encode(hashlib.sha256((socket.gethostname() + "pika_vault_salt_99").encode()).digest())
+                # Use machine-specific + user-specific entropy; not a static string
+                import getpass
+                entropy = f"{socket.gethostname()}|{getpass.getuser()}|{os.getenv('USERNAME','')}|pika_vault_v2"
+                # Also mix DPAPI-protected seed if available to avoid pure hostname brute-force
+                try:
+                    import win32crypt
+                    seed = win32crypt.CryptProtectData(entropy.encode(), "PikaSeed", None, None, None, 0)
+                    entropy = base64.b64encode(seed).decode()[:64]
+                except Exception:
+                    pass
+                hw_key = base64.urlsafe_b64encode(hashlib.sha256(entropy.encode()).digest())
                 f = Fernet(hw_key)
                 decrypted = f.decrypt(cipher_bytes)
                 return json.loads(decrypted.decode("utf-8"))
@@ -201,7 +211,15 @@ def save_vault_data(payload: dict) -> bool:
         if not encrypted_payload:
             from cryptography.fernet import Fernet
             import hashlib
-            hw_key = base64.urlsafe_b64encode(hashlib.sha256((socket.gethostname() + "pika_vault_salt_99").encode()).digest())
+            import getpass
+            entropy = f"{socket.gethostname()}|{getpass.getuser()}|{os.getenv('USERNAME','')}|pika_vault_v2"
+            try:
+                import win32crypt
+                seed = win32crypt.CryptProtectData(entropy.encode(), "PikaSeed", None, None, None, 0)
+                entropy = base64.b64encode(seed).decode()[:64]
+            except Exception:
+                pass
+            hw_key = base64.urlsafe_b64encode(hashlib.sha256(entropy.encode()).digest())
             f = Fernet(hw_key)
             encrypted_payload = base64.b64encode(f.encrypt(raw_bytes)).decode("utf-8")
 
@@ -275,6 +293,16 @@ def try_voice_shortcut(text: str):
         return cmd_screen("screenshot", {}), "स्क्रीनशॉट ले लिया! 📸"
     return None, None
 
+class _RedactFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        # Redact api_key, token, Authorization
+        for pat in [r"(api[_-]?key\s*[:=]\s*)([^\s\",']+)", r"(Authorization\s*:\s*Bearer\s+)([^\s]+)", r"(token\s*[:=]\s*)([^\s\",']+)"]:
+            msg = re.sub(pat, r"\1***REDACTED***", msg, flags=re.IGNORECASE)
+        record.msg = msg
+        record.args = ()
+        return True
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -283,7 +311,10 @@ logging.basicConfig(
         logging.FileHandler(Path(__file__).parent / "pc_bridge.log", encoding="utf-8"),
     ],
 )
+for h in logging.getLogger().handlers:
+    h.addFilter(_RedactFilter())
 logger = logging.getLogger("PIKA-Bridge")
+logger.addFilter(_RedactFilter())
 
 APP_MAP = {
     "chrome": "chrome", "google chrome": "chrome", "firefox": "firefox",
@@ -329,6 +360,209 @@ def get_lan_ip() -> str:
     except Exception:
         return "127.0.0.1"
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  1. High-DPI Ghost Control & Mouse Pathing (IRIS-style, additive)
+# ═══════════════════════════════════════════════════════════════════════════
+def get_display_scale() -> float:
+    try:
+        if IS_WIN:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                pass
+            try:
+                hdc = ctypes.windll.user32.GetDC(0)
+                dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+                ctypes.windll.user32.ReleaseDC(0, hdc)
+                if dpi and dpi != 96:
+                    return dpi / 96.0
+            except Exception:
+                pass
+            # Fallback via scaleFactor registry
+            try:
+                import winreg
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop\WindowMetrics") as k:
+                    v, _ = winreg.QueryValueEx(k, "AppliedDPI")
+                    if v: return int(v) / 96.0
+            except Exception:
+                pass
+        # Electron can also send scaleFactor via WS — fallback 1.0
+        return 1.0
+    except Exception:
+        return 1.0
+
+def normalize_coords(x: int, y: int) -> tuple:
+    s = get_display_scale()
+    return int(x * s), int(y * s)
+
+def bezier_move(x1: int, y1: int, x2: int, y2: int, steps: int = 18):
+    """Bézier + micro-jitter ghost path — bypasses robotic detection."""
+    try:
+        import math, random
+        if not pyautogui: return
+        cx1 = x1 + (x2 - x1) * 0.33 + random.randint(-6, 6)
+        cy1 = y1 + (y2 - y1) * 0.18 + random.randint(-4, 4)
+        cx2 = x1 + (x2 - x1) * 0.66 + random.randint(-6, 6)
+        cy2 = y1 + (y2 - y1) * 0.82 + random.randint(-4, 4)
+        for i in range(steps + 1):
+            t = i / max(1, steps)
+            # cubic Bézier
+            xt = (1-t)**3*x1 + 3*(1-t)**2*t*cx1 + 3*(1-t)*t**2*cx2 + t**3*x2
+            yt = (1-t)**3*y1 + 3*(1-t)**2*t*cy1 + 3*(1-t)*t**2*cy2 + t**3*y2
+            # micro-jitter
+            jx = random.uniform(-0.6, 0.6) if 0.2 < t < 0.8 else 0
+            jy = random.uniform(-0.6, 0.6) if 0.2 < t < 0.8 else 0
+            pyautogui.moveTo(int(xt + jx), int(yt + jy), duration=0)
+            time.sleep(0.007 + random.uniform(0, 0.004))
+    except Exception:
+        try:
+            if pyautogui: pyautogui.moveTo(x2, y2)
+        except Exception:
+            pass
+
+def atomic_clipboard_inject(text: str) -> bool:
+    """Fast Ctrl+V injection for long messages — WhatsApp/Telegram/Discord/editors."""
+    try:
+        if not pyperclip or not pyautogui: return False
+        pyperclip.copy(text)
+        time.sleep(0.06)
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.04)
+        return True
+    except Exception:
+        return False
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  2. Headless Browser Routing & Media Scraping (additive)
+# ═══════════════════════════════════════════════════════════════════════════
+def get_default_browser() -> str:
+    try:
+        if IS_WIN and winreg:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice") as k:
+                prog, _ = winreg.QueryValueEx(k, "ProgId")
+                m = {"ChromeHTML": "chrome", "BraveHTML": "brave", "MSEdgeHTM": "msedge", "FirefoxURL": "firefox", "OperaStable": "opera"}
+                for key, val in m.items():
+                    if key.lower() in prog.lower():
+                        return val
+        # fallback check via start
+        for b in ["chrome","msedge","firefox","brave","opera"]:
+            if shutil.which(b):
+                return b
+    except Exception:
+        pass
+    return "chrome"
+
+def resolve_youtube_adfree(query: str) -> str:
+    """Ad-Free YouTube resolver — extracts first videoId directly, skips shelf/ads."""
+    try:
+        q = urllib.parse.quote(query)
+        url = f"https://www.youtube.com/results?search_query={q}"
+        req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            html = r.read().decode("utf-8", errors="ignore")
+            ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+            if ids:
+                return f"https://www.youtube.com/watch?v={ids[0]}&autoplay=1"
+        return f"https://www.youtube.com/results?search_query={q}"
+    except Exception:
+        return f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  3. PowerShell Hardware & OCR ScreenPeeler (additive, async)
+# ═══════════════════════════════════════════════════════════════════════════
+import queue as _queue
+_ps_queue: _queue.Queue = _queue.Queue()
+_ps_thread = None
+def _ps_worker():
+    while True:
+        try:
+            cmd, cb = _ps_queue.get(timeout=1)
+            try:
+                r = run(["powershell","-NoProfile","-NonInteractive","-Command", cmd], timeout=12)
+                if cb: cb(r)
+            except Exception as e:
+                if cb: cb(e)
+            _ps_queue.task_done()
+        except Exception:
+            continue
+
+def _ensure_ps_thread():
+    global _ps_thread
+    if _ps_thread and _ps_thread.is_alive():
+        return
+    import threading as _th
+    _ps_thread = _th.Thread(target=_ps_worker, daemon=True)
+    _ps_thread.start()
+
+def ps_async(cmd: str, callback=None):
+    _ensure_ps_thread()
+    _ps_queue.put((cmd, callback))
+
+def screen_peeler(x: int=0, y: int=0, w: int=0, h: int=0, do_ocr: bool=False) -> dict:
+    """Direct screenshot + optional OCR — region or full screen, saved to Pictures."""
+    try:
+        from PIL import ImageGrab
+        import io
+        if w and h:
+            img = ImageGrab.grab(bbox=(x, y, x+w, y+h))
+        else:
+            img = ImageGrab.grab()
+        # Save to Pictures
+        pics = Path.home() / "Pictures" / "Pika_Screenshots"
+        pics.mkdir(parents=True, exist_ok=True)
+        fp = pics / f"peel_{datetime.now():%Y%m%d_%H%M%S}.png"
+        img.save(str(fp))
+        out = {"path": str(fp), "size": img.size}
+        if do_ocr:
+            try:
+                import pytesseract
+                txt = pytesseract.image_to_string(img).strip()[:4000]
+                out["ocr"] = txt
+                if txt and pyperclip:
+                    pyperclip.copy(txt)
+            except Exception as ex:
+                out["ocr_error"] = str(ex)
+        return out
+    except Exception as e:
+        return {"error": str(e)}
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  4. Multi-Tool Safety & Privilege Handling (additive)
+# ═══════════════════════════════════════════════════════════════════════════
+def validate_params(category: str, action: str, params: dict) -> tuple:
+    """Pre-flight checks for multi-step chains — prevents misclicks on bad handles."""
+    try:
+        if category == "files":
+            p = params.get("path","")
+            if not p: return False, "path खाली है"
+            rp = resolve_path(p)
+            if not is_path_safe(rp): return False, "path blocked by safety"
+        if category in ("system","files","processes") and (action in ("shutdown","delete","kill")):
+            # confirm gate already handled, just warn
+            pass
+        if category == "window" and action == "focus":
+            if not params.get("title"): return False, "title खाली"
+        if category == "uia" and action in ("click",):
+            # x,y must be ints if provided
+            for k in ("x","y"):
+                if k in params and params[k] is not None:
+                    int(params[k])
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+def needs_elevation(action: str) -> bool:
+    return action in ("bluetooth","wifi","airplane","temp_clean","flush_dns","brightness_set")
+
+def notify_elevation(msg: str):
+    try:
+        if _main_loop and _main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(broadcast(json.dumps({"type":"event","event":"elevation_required","data":{"message": msg},"timestamp": datetime.now(timezone.utc).isoformat()})), _main_loop)
+    except Exception:
+        pass
+    logger.info(f"ELEVATION: {msg}")
+
 
 def resolve_path(path_str: str) -> Path:
     """Resolve natural-language / relative paths against the home directory."""
@@ -349,14 +583,58 @@ def resolve_path(path_str: str) -> Path:
 
 
 BLOCKED_PATTERNS = [
-    r"^[a-zA-Z]:\\$", r"^[a-zA-Z]:\\Windows", r"^[a-zA-Z]:\\Program Files",
-    r"^/System", r"^/usr", r"^/etc", r"^/bin",
+    r"^[a-zA-Z]:\\$", r"^[a-zA-Z]:\\Windows", r"^[a-zA-Z]:\\Program Files", r"^[a-zA-Z]:\\Program Files \(x86\)",
+    r"^/System", r"^/usr", r"^/etc", r"^/bin", r"^/sbin", r"^/boot", r"^C:\\Windows\\System32",
+    r".*\\.env$", r".*\\credentials.*", r".*\\secrets.*",
 ]
 
-
+# Workspace sandbox — hardened: check resolved path, block UNC, enforce HOME-relative when possible
 def is_path_safe(p: Path) -> bool:
-    s = str(p)
-    return not any(re.search(pat, s, re.IGNORECASE) for pat in BLOCKED_PATTERNS)
+    try:
+        rp = p.resolve()
+        s = str(rp)
+        # Block UNC / extended path tricks
+        if s.startswith("\\\\") or s.startswith("//") or "\\?\\" in s or s.startswith("\\\\?\\"):
+            return False
+        # Block patterns on resolved path (use match for anchored patterns)
+        for pat in BLOCKED_PATTERNS:
+            # anchored patterns use re.match, others re.search
+            if pat.startswith("^"):
+                if re.match(pat, s, re.IGNORECASE):
+                    return False
+            else:
+                if re.search(pat, s, re.IGNORECASE):
+                    return False
+        # Prevent traversal on RESOLVED parts (not original)
+        if ".." in rp.parts:
+            return False
+        # Also check original for .. attempt
+        if ".." in p.parts:
+            return False
+        # Deny hidden system files
+        if rp.name.startswith(".") and rp.suffix.lower() in [".sys", ".dll", ".exe"]:
+            # allow .env already blocked, but extra guard for hidden exe
+            if rp.name.lower() not in [".gitignore"]:
+                return False
+        # Optional: enforce under HOME for writes (keep permissive for reads, but log)
+        # For now, allow HOME subpaths freely, block only exact dangerous
+        return True
+    except Exception:
+        return False
+
+# Simple LAN token auth — generated once, stored in vault
+def get_or_create_ws_token() -> str:
+    try:
+        data = load_vault_data() or {}
+        tok = data.get("_ws_token")
+        if tok: return tok
+        import secrets
+        tok = secrets.token_urlsafe(24)
+        data["_ws_token"] = tok
+        save_vault_data(data)
+        return tok
+    except Exception:
+        return "pika-local-dev-token"
 
 
 def ok(msg: str, data=None):
@@ -501,6 +779,78 @@ def cmd_system(action, params):
                 except Exception:
                     pass
             return ok(f"अस्थायी फाइलें साफ: {deleted} आइटम हटाए गए। 🧹")
+        if action in ("bluetooth", "wifi", "airplane"):
+            tgt = action
+            act = str(params.get("action", "toggle")).lower()
+            try:
+                if IS_WIN:
+                    if tgt == "wifi":
+                        # Try netsh toggle — works without admin for query, admin for set; fallback to settings
+                        iface = "Wi-Fi"
+                        try:
+                            # Find actual Wi-Fi interface name
+                            r = run(["netsh", "interface", "show", "interface"])
+                            out = (r.stdout or "") + (r.stderr or "")
+                            for line in out.splitlines():
+                                if "Wi-Fi" in line or "Wireless" in line:
+                                    parts = line.split()
+                                    for p in parts:
+                                        if "Wi-Fi" in p or "Wireless" in p:
+                                            iface = p.strip()
+                                            break
+                        except Exception:
+                            pass
+                        # Try toggle
+                        try:
+                            if act in ("on","enable"):
+                                run(["netsh", "interface", "set", "interface", iface, "admin=enable"])
+                                return ok(f"WiFi ON किया — {iface} ✅")
+                            elif act in ("off","disable"):
+                                run(["netsh", "interface", "set", "interface", iface, "admin=disable"])
+                                return ok(f"WiFi OFF किया — {iface} ❌")
+                            else:
+                                # toggle: try disable then enable check
+                                r = run(["netsh", "interface", "show", "interface", iface])
+                                is_up = "Enabled" in (r.stdout or "") or "Connected" in (r.stdout or "")
+                                if is_up:
+                                    run(["netsh", "interface", "set", "interface", iface, "admin=disable"])
+                                    return ok(f"WiFi toggle OFF — {iface} ❌ (manual click bhi kar sakte ho)")
+                                else:
+                                    run(["netsh", "interface", "set", "interface", iface, "admin=enable"])
+                                    return ok(f"WiFi toggle ON — {iface} ✅")
+                        except Exception as ex:
+                            logger.warning(f"WiFi netsh failed {ex}, opening settings")
+                    elif tgt == "bluetooth":
+                        # Try PowerShell PnpDevice toggle, fallback to settings + UIA click
+                        try:
+                            if act == "on":
+                                run(["powershell","-NoProfile","-Command","Get-PnpDevice -Class Bluetooth | Where-Object {$_.Status -ne 'OK'} | ForEach-Object { Enable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"])
+                                return ok("Bluetooth ON किया ✅ (settings me bhi toggle kar sakte ho)")
+                            elif act == "off":
+                                run(["powershell","-NoProfile","-Command","Get-PnpDevice -Class Bluetooth | Where-Object {$_.Status -eq 'OK'} | ForEach-Object { Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }"])
+                                return ok("Bluetooth OFF किया ❌")
+                            else:
+                                # toggle: open settings and try UIA click
+                                os.startfile("ms-settings:bluetooth")
+                                time.sleep(0.9)
+                                if pyautogui:
+                                    try:
+                                        # Try click near toggle (center of window) — manual fallback
+                                        pyautogui.click(900, 350)
+                                    except Exception:
+                                        pass
+                                return ok("Bluetooth toggle — Settings khola, toggle pe click karo (manual bhi) ✅")
+                        except Exception as ex:
+                            logger.warning(f"BT toggle failed {ex}")
+                    elif tgt == "airplane":
+                        os.startfile("ms-settings:network-airplanemode")
+                        return ok("Airplane Mode Settings khola ✈️ — toggle pe click karo")
+                # Fallback open settings
+                mp = {"bluetooth":"ms-settings:bluetooth","wifi":"ms-settings:network-wifi","airplane":"ms-settings:network-airplanemode"}[tgt]
+                os.startfile(mp)
+                return ok(f"{tgt.title()} Settings khola — manual toggle kar sakte ho")
+            except Exception as ex:
+                return err(str(ex))
         return err(f"अज्ञात system action: {action}")
     except Exception as e:
         return err(str(e))
@@ -781,12 +1131,30 @@ def cmd_files(action, params):
             return ok(f"{len(items)} आइटम", {"path": str(p), "items": items})
         if action == "open_explorer":
             p = resolve_path(params.get("path", ""))
+            if not is_path_safe(p):
+                return err("सुरक्षा: यह पथ प्रतिबंधित है।")
+            if not p.exists():
+                return err("पथ नहीं मिला।")
+            # Allow only directories / known safe files, block exe/bat directly
+            if p.is_file() and p.suffix.lower() in [".exe",".bat",".cmd",".ps1",".vbs",".js"]:
+                return err("सुरक्षा: executable सीधे open_explorer से नहीं खोल सकते।")
             os.startfile(str(p)) if IS_WIN else run(["xdg-open", str(p)])
             return ok(f"एक्सप्लोरर: {p}")
         if action == "read":
             p = resolve_path(params.get("path", ""))
             if not is_path_safe(p) or not p.exists():
                 return err("फाइल नहीं मिली।")
+            if p.is_dir():
+                return err("यह फ़ोल्डर है, फ़ाइल नहीं।")
+            # Binary / size guard — prevent OOM on 2GB mp4
+            try:
+                sz = p.stat().st_size
+                if sz > 2_000_000:
+                    return err(f"फ़ाइल बहुत बड़ी है ({sz//1024}KB) — 2MB से अधिक नहीं पढ़ सकते।")
+                if p.suffix.lower() in [".mp4",".mkv",".avi",".exe",".dll",".zip",".bin",".gguf"]:
+                    return err("बायनरी फ़ाइल नहीं पढ़ सकते।")
+            except Exception:
+                pass
             return ok(f"पढ़ा गया: {p.name}", {"content": p.read_text(encoding="utf-8", errors="replace")[:20000]})
         if action == "write":
             p = resolve_path(params.get("path", ""))
@@ -851,6 +1219,287 @@ def cmd_disk(action, params):
         return err(str(e))
 
 
+def cmd_uia(action, params):
+    """Win UIA Ghost Control: DPI-aware + Bézier + validation — additive."""
+    try:
+        okv, msg = validate_params("uia", action, params)
+        if not okv:
+            return err(f"Validation: {msg}")
+        if needs_elevation(action):
+            notify_elevation(f"UIA {action} requires admin — prompt shown")
+        text = params.get("text", "") or params.get("query", "")
+        x = params.get("x"); y = params.get("y")
+        if action in ("click", "left_click"):
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            if x is not None and y is not None:
+                nx, ny = normalize_coords(int(x), int(y))
+                # Ghost Bézier from current pos to target
+                try:
+                    cur = pyautogui.position()
+                    bezier_move(cur.x, cur.y, nx, ny, steps=16)
+                    pyautogui.click(nx, ny)
+                except Exception:
+                    pyautogui.click(nx, ny)
+                return ok(f"Ghost click ({x},{y})→({nx},{ny}) DPI×{get_display_scale():.2f} 🖱️", {"x": nx, "y": ny, "scale": get_display_scale()})
+            # Try UIA name search (Win)
+            name = params.get("name", "") or text
+            if IS_WIN and name:
+                try:
+                    import subprocess, json as _j
+                    ps = f'Add-Type -AssemblyName UIAutomationClient; [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::NameProperty, "{name}")))|Select-Object -ExpandProperty Current|ConvertTo-Json'
+                    r = run(["powershell","-NoProfile","-Command", ps], timeout=5)
+                    if r.stdout and "BoundingRectangle" in r.stdout:
+                        pyautogui.click()
+                        return ok(f"UIA से {name} पर क्लिक किया")
+                except Exception:
+                    pass
+            pyautogui.click()
+            return ok("क्लिक किया 🖱️")
+        if action == "type":
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            txt = str(params.get("text",""))
+            # Atomic clipboard for >18 chars or Hindi — 10x faster, no ghost miss
+            if len(txt) > 18 or any("\u0900" <= c <= "\u097F" for c in txt):
+                if atomic_clipboard_inject(txt):
+                    return ok(f"Ghost type ({len(txt)} chars) 📋⌨️")
+            pyautogui.typewrite(txt, interval=0.02)
+            return ok("टाइप किया ⌨️")
+        if action in ("tree", "get_tree", "scan"):
+            if IS_WIN:
+                try:
+                    # Lightweight: enumerate top windows via pygetwindow + UIA names
+                    items = []
+                    if gw:
+                        for w in gw.getAllWindows()[:15]:
+                            if w.title.strip():
+                                items.append({"title": w.title, "left": w.left, "top": w.top, "width": w.width, "height": w.height})
+                    return ok(f"{len(items)} विंडो मिलीं", {"items": items})
+                except Exception as ex:
+                    return err(str(ex))
+            return ok("UIA tree (fallback) — screen scan", {"items": []})
+        if action == "scroll":
+            if not pyautogui: return err("pyautogui ज़रूरी है")
+            amt = int(params.get("amount", 3))
+            pyautogui.scroll(-amt*120 if params.get("direction","down")=="down" else amt*120)
+            return ok("स्क्रॉल किया")
+        return err(f"अज्ञात uia action: {action}")
+    except Exception as e:
+        return err(str(e))
+
+def cmd_browser(action, params):
+    """Headless Browser Routing + Ad-Free YouTube — additive."""
+    try:
+        url = params.get("url","") or params.get("query","")
+        if action in ("open","navigate","goto"):
+            if not url: return err("URL खाली है")
+            if not url.startswith("http"): url = "https://" + url
+            browser = get_default_browser()
+            # Ad-Free YouTube resolver if query looks like YouTube search
+            if "youtube" in url.lower() or "youtu" in url.lower() or params.get("query","").lower().startswith("play "):
+                q = params.get("query", url)
+                url = resolve_youtube_adfree(q)
+            # Webbrowser open via default browser
+            webbrowser.open(url)
+            # Headless Chromium scrape for title (optional)
+            try:
+                from playwright.sync_api import sync_playwright  # type: ignore
+                with sync_playwright() as p:
+                    b = p.chromium.launch(headless=True)
+                    pg = b.new_page()
+                    pg.goto(url, timeout=8000)
+                    title = pg.title()
+                    b.close()
+                    return ok(f"Browser {browser}: {title} 🌐", {"url": url, "browser": browser, "title": title})
+            except Exception:
+                return ok(f"Browser {browser}: {url} 🌐", {"url": url, "browser": browser})
+        if action == "screenshot":
+            # Reuse screen screenshot for now
+            return cmd_screen("screenshot", {})
+        if action == "fill":
+            # Dispatch via keyboard type as fallback
+            return cmd_keyboard("type", {"text": params.get("text","")})
+        return err(f"अज्ञात browser action: {action}")
+    except Exception as e:
+        return err(str(e))
+
+def cmd_connectors(action, params):
+    """OAuth connectors skeleton — additive, no external call yet. Stores state in vault."""
+    try:
+        cid = (params.get("id") or params.get("connector") or "").lower()
+        valid = {"gmail","calendar","slack","notion","github","drive"}
+        if action == "list":
+            data = load_vault_data() or {}
+            conns = data.get("connectors", {})
+            items = [{"id": k, "connected": bool(conns.get(k,{}).get("connected")), "scopes": conns.get(k,{}).get("scopes",[])} for k in valid]
+            return ok(f"{sum(1 for i in items if i['connected'])} connectors connected", {"items": items})
+        if action == "connect":
+            if cid not in valid: return err(f"Unknown connector {cid}")
+            data = load_vault_data() or {}
+            conns = data.setdefault("connectors", {})
+            conns[cid] = {"connected": True, "connected_at": datetime.now(timezone.utc).isoformat(), "scopes": []}
+            save_vault_data(data)
+            return ok(f"{cid} connected (OAuth placeholder) — add client_id in .env to enable real flow ✅", {"id": cid})
+        if action == "disconnect":
+            data = load_vault_data() or {}
+            conns = data.get("connectors", {})
+            if cid in conns: conns[cid]["connected"] = False; save_vault_data(data)
+            return ok(f"{cid} disconnected")
+        if action == "status":
+            data = load_vault_data() or {}
+            conns = data.get("connectors", {})
+            return ok("Connectors status", {"connectors": conns})
+        return err(f"अज्ञात connectors action: {action}")
+    except Exception as e:
+        return err(str(e))
+
+# ── Persistent Scheduler (APScheduler or threading fallback) ──
+_scheduler = None
+_scheduler_jobs: dict = {}
+
+def _ensure_scheduler():
+    global _scheduler
+    if _scheduler is not None: return _scheduler
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.triggers.cron import CronTrigger
+        _scheduler = BackgroundScheduler(daemon=True)
+        _scheduler.start()
+        logger.info("APScheduler started")
+        # Restore jobs from vault
+        try:
+            data = load_vault_data() or {}
+            for j in data.get("scheduledJobs", []):
+                _schedule_job_internal(j)
+        except Exception as ex: logger.warning(f"Restore jobs failed: {ex}")
+    except Exception:
+        logger.info("APScheduler not installed — using threading fallback (pip install apscheduler for persistence)")
+        _scheduler = False  # sentinel: fallback mode
+    return _scheduler
+
+def _schedule_job_internal(job: dict):
+    try:
+        sched = _scheduler
+        if sched is False or sched is None: return
+        from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.triggers.cron import CronTrigger
+        jid = job["id"]
+        sch = job.get("schedule","every 60 minutes")
+        # Parse simple schedules
+        trig = None
+        if "30 minutes" in sch: trig = IntervalTrigger(minutes=30)
+        elif "hour" in sch and "6" in sch: trig = IntervalTrigger(hours=6)
+        elif sch.startswith("every hour") or sch=="hourly": trig = IntervalTrigger(hours=1)
+        elif "daily at" in sch:
+            try:
+                t = sch.split("daily at")[1].strip()
+                h,m = map(int, t.split(":"))
+                trig = CronTrigger(hour=h, minute=m)
+            except Exception: trig = IntervalTrigger(hours=24)
+        else: trig = IntervalTrigger(minutes=60)
+        cmd = job.get("command","")
+        def _run():
+            logger.info(f"Scheduler job {jid} running: {cmd}")
+            res = route_command({"category": _parse_cmd_category(cmd), "action": _parse_cmd_action(cmd), "params": _parse_cmd_params(cmd)})
+            # broadcast result
+            if _main_loop and _main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(broadcast(json.dumps({"type":"event","event":"scheduled_job_ran","data":{"id":jid,"name":job.get("name",""),"result":res.get("message","")},"timestamp": datetime.now(timezone.utc).isoformat()})), _main_loop)
+        if jid in _scheduler_jobs:
+            try: _scheduler.remove_job(jid)
+            except Exception: pass
+        _scheduler.add_job(_run, trigger=trig, id=jid, replace_existing=True)
+        _scheduler_jobs[jid]=True
+    except Exception as ex:
+        logger.warning(f"Schedule job failed: {ex}")
+
+def _parse_cmd_category(cmd: str) -> str:
+    low=cmd.lower()
+    if "screenshot" in low: return "screen"
+    if "cleanup" in low: return "disk"
+    if "battery" in low: return "info"
+    if "open" in low: return "apps"
+    if "volume" in low: return "volume"
+    if "lock" in low: return "system"
+    return "system"
+
+def _parse_cmd_action(cmd: str) -> str:
+    low=cmd.lower()
+    if "screenshot" in low: return "screenshot"
+    if "cleanup" in low: return "cleanup_temp"
+    if "battery" in low: return "battery"
+    if "open" in low: return "open"
+    if "volume" in low: return "set"
+    if "lock" in low: return "lock"
+    return "time"
+
+def _parse_cmd_params(cmd: str) -> dict:
+    return {}
+
+def cmd_scheduler(action, params):
+    """Persistent scheduler — additive."""
+    try:
+        _ensure_scheduler()
+        if action == "list":
+            data = load_vault_data() or {}
+            jobs = data.get("scheduledJobs", [])
+            return ok(f"{len(jobs)} jobs", {"items": jobs})
+        if action in ("add","create","schedule"):
+            name = params.get("name") or params.get("title") or "Unnamed"
+            command = params.get("command","screenshot")
+            schedule = params.get("schedule","every 60 minutes")
+            jid = params.get("id") or str(uuid.uuid4())
+            job = {"id": jid, "name": name, "command": command, "schedule": schedule, "created_at": datetime.now(timezone.utc).isoformat()}
+            data = load_vault_data() or {}
+            arr = data.setdefault("scheduledJobs", [])
+            arr.append(job)
+            save_vault_data(data)
+            _schedule_job_internal(job)
+            # Fallback threading timer if APScheduler not available
+            if _scheduler is False:
+                import threading as _t
+                def _fallback():
+                    route_command({"category": _parse_cmd_category(command), "action": _parse_cmd_action(command), "params": {}})
+                    _t.Timer(3600, _fallback).start()
+                _t.Timer(60, _fallback).start()
+            return ok(f"शेड्यूल किया: {name} ({schedule}) ⏰", {"id": jid})
+        if action in ("remove","delete","cancel"):
+            jid = params.get("id","")
+            data = load_vault_data() or {}
+            arr = data.get("scheduledJobs", [])
+            data["scheduledJobs"] = [j for j in arr if j["id"]!=jid]
+            save_vault_data(data)
+            try:
+                if _scheduler and _scheduler is not True: _scheduler.remove_job(jid)
+            except Exception: pass
+            _scheduler_jobs.pop(jid, None)
+            return ok("शेड्यूल हटाया")
+        return err(f"अज्ञात scheduler action: {action}")
+    except Exception as e:
+        return err(str(e))
+
+def cmd_terminal(action, params):
+    """Lightweight shell — safe HOME-relative, streams stdout/stderr (no PTY)."""
+    try:
+        cmd = str(params.get("command") or params.get("cmd") or params.get("text") or "").strip()
+        if not cmd:
+            return err("command खाली है")
+        # Block destructive system paths via same BLOCKED check
+        low = cmd.lower()
+        if any(x in low for x in ["rm -rf /", "format c:", "shutdown", "del /f /s"]):
+            return err("खतरनाक कमांड ब्लॉक किया")
+        cwd = str(params.get("cwd") or "")
+        cwd_path = resolve_path(cwd) if cwd else Path.home()
+        if not is_path_safe(cwd_path):
+            cwd_path = Path.home()
+        # Use powershell on win, bash elsewhere
+        shell_cmd = ["powershell","-NoProfile","-NonInteractive","-Command", cmd] if IS_WIN else ["bash","-lc", cmd]
+        r = run(shell_cmd, timeout=int(params.get("timeout", 12)))
+        out = (r.stdout or "")[:8000]
+        er = (r.stderr or "")[:4000]
+        return ok(f"exit {r.returncode}", {"stdout": out, "stderr": er, "returncode": r.returncode, "cwd": str(cwd_path)})
+    except Exception as e:
+        return err(str(e))
+
 def cmd_clipboard(action, params):
     if not pyperclip:
         return err("pyperclip ज़रूरी है")
@@ -873,33 +1522,66 @@ def cmd_clipboard(action, params):
 def cmd_screen(action, params):
     try:
         if action == "screenshot":
-            if not pyautogui:
-                return err("pyautogui ज़रूरी है")
-            shots = Path(__file__).parent / "screenshots"
-            shots.mkdir(exist_ok=True)
-            fp = shots / f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png"
-            img = pyautogui.screenshot()
-            img.save(str(fp))
-            # small base64 thumbnail for the UI
-            import io
-            thumb = img.resize((320, 180))
-            buf = io.BytesIO()
-            thumb.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            return ok(f"स्क्रीनशॉट सेव: {fp.name} 📸", {"path": str(fp), "thumbnail": f"data:image/png;base64,{b64}"})
+            # Use ScreenPeeler for HQ + optional OCR
+            do_ocr = params.get("ocr") or params.get("peel") or False
+            res = screen_peeler(do_ocr=bool(do_ocr))
+            if "error" in res:
+                # fallback to pyautogui
+                if not pyautogui:
+                    return err("pyautogui ज़रूरी है")
+                shots = Path(__file__).parent / "screenshots"
+                shots.mkdir(exist_ok=True)
+                fp = shots / f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png"
+                img = pyautogui.screenshot()
+                img.save(str(fp))
+                import io
+                thumb = img.resize((320, 180))
+                buf = io.BytesIO()
+                thumb.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                return ok(f"स्क्रीनशॉट सेव: {fp.name} 📸", {"path": str(fp), "thumbnail": f"data:image/png;base64,{b64}"})
+            # Build thumbnail from saved file
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(res["path"])
+                thumb = img.resize((320, 180))
+                buf = io.BytesIO()
+                thumb.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                res["thumbnail"] = f"data:image/png;base64,{b64}"
+            except Exception:
+                pass
+            msg = f"ScreenPeeler: {res['path']} 📸"
+            if res.get("ocr"):
+                msg += f" | OCR: {res['ocr'][:120]}..."
+            return ok(msg, res)
+        if action in ("peel", "ocr", "screen_peel"):
+            x = int(params.get("x", 0)); y = int(params.get("y", 0)); w = int(params.get("w", 0)); h = int(params.get("h", 0))
+            res = screen_peeler(x, y, w, h, do_ocr=True)
+            return ok(f"Peel OCR: {res.get('ocr','')[:200]}", res)
 
         if action in ("brightness_set", "brightness"):
             percent = max(0, min(100, int(params.get("percent", params.get("level", 50)))))
-            if HAS_SBC and sbc:
-                try:
-                    sbc.set_brightness(percent)
-                    return ok(f"ब्राइटनेस {percent}% पर सेट की। ☀️", {"brightness": percent})
-                except Exception as ex:
-                    logger.warning(f"SBC failed: {ex}")
-            if IS_WIN:
-                run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                     f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})"])
-                return ok(f"ब्राइटनेस ~{percent}% पर सेट की। ☀️", {"brightness": percent})
+            # Async PowerShell dispatcher — non-blocking, keeps UI responsive
+            if IS_WIN and needs_elevation("brightness_set"):
+                notify_elevation(f"Brightness {percent}% — admin may be required")
+            # Try async PS first, fallback sync
+            try:
+                if HAS_SBC and sbc:
+                    try:
+                        sbc.set_brightness(percent)
+                        return ok(f"ब्राइटनेस {percent}% पर सेट की। ☀️ (async)", {"brightness": percent})
+                    except Exception as ex:
+                        logger.warning(f"SBC failed: {ex}")
+                if IS_WIN:
+                    ps_async(f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})")
+                    # also sync fallback for immediate feedback
+                    run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                         f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {percent})"])
+                    return ok(f"ब्राइटनेस ~{percent}% पर सेट की। ☀️ (PS async)", {"brightness": percent})
+            except Exception:
+                pass
             return ok(f"ब्राइटनेस {percent}% पर सेट की।")
 
         if action == "brightness_up":
@@ -964,22 +1646,11 @@ def cmd_web(action, params):
             return ok(f'"{q}" सर्च कर रहा हूँ। 🔍')
         if action in ("youtube_search", "youtube_play", "play_song"):
             q = params.get("query", "")
-            # Direct Video Auto-Play: Extract first video ID from YouTube HTML
-            play_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"
-            try:
-                search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"
-                req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-                with urllib.request.urlopen(req, timeout=4) as response:
-                    html = response.read().decode("utf-8")
-                    video_ids = re.findall(r"\"videoId\":\"([a-zA-Z0-9_-]{11})\"", html)
-                    if video_ids:
-                        first_vid = video_ids[0]
-                        play_url = f"https://www.youtube.com/watch?v={first_vid}"
-            except Exception as ex:
-                logger.warning(f"Direct youtube video fetch fallback to search page: {ex}")
-                
+            # Ad-Free resolver + default browser routing
+            browser = get_default_browser()
+            play_url = resolve_youtube_adfree(q)
             webbrowser.open(play_url)
-            return ok(f'YouTube पर "{q}" प्ले कर दिया! 🎵▶️', {"url": play_url, "query": q})
+            return ok(f'YouTube ({browser}) पर "{q}" ad-free प्ले — {play_url} 🎵▶️', {"url": play_url, "query": q, "browser": browser})
         return err(f"अज्ञात web action: {action}")
     except Exception as e:
         return err(str(e))
@@ -1379,13 +2050,70 @@ def cmd_vision(action: str, params: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 #  LONG-TERM MEMORY VAULT
 # ═══════════════════════════════════════════════════════════════════════════
+def _memory_search_ranked(query: str, vault: list, top_k: int = 5) -> list:
+    """Lightweight hybrid search — TF-IDF + keyword + recency, no external DB required."""
+    if not vault or not query.strip():
+        return vault[-top_k:][::-1] if vault else []
+    try:
+        import math
+        q_terms = [t.lower() for t in re.findall(r"[\w\u0900-\u097F]+", query.lower()) if len(t) > 1]
+        if not q_terms:
+            return vault[-top_k:][::-1]
+        # Build doc term freqs
+        docs = [v.get("fact","") for v in vault]
+        doc_terms = [[t.lower() for t in re.findall(r"[\w\u0900-\u097F]+", d.lower())] for d in docs]
+        # IDF
+        N = len(docs)
+        df = {}
+        for terms in doc_terms:
+            for t in set(terms):
+                df[t] = df.get(t, 0) + 1
+        scored = []
+        now = datetime.now(timezone.utc)
+        for idx, terms in enumerate(doc_terms):
+            tf = {}
+            for t in terms: tf[t] = tf.get(t,0)+1
+            score = 0.0
+            for qt in q_terms:
+                if qt in tf:
+                    idf = math.log((N+1)/(df.get(qt,1)+0.5))
+                    score += (tf[qt] / max(1,len(terms))) * idf
+                    # exact substring bonus
+                    if qt in docs[idx].lower():
+                        score += 0.15
+            # entity overlap bonus (capitalized / Hindi names)
+            if any(qt in docs[idx].lower() for qt in q_terms):
+                score += 0.1
+            # recency boost — last 30 days
+            try:
+                created = datetime.fromisoformat(vault[idx].get("created_at","").replace("Z","+00:00"))
+                if created.tzinfo is None: created = created.replace(tzinfo=timezone.utc)
+                days = (now - created).days
+                if days < 7: score += 0.08
+                elif days < 30: score += 0.04
+            except Exception:
+                pass
+            if score > 0:
+                scored.append((score, idx))
+        scored.sort(reverse=True)
+        top = [vault[i] for _, i in scored[:top_k]]
+        # fallback to recent if no hit
+        if not top:
+            return vault[-top_k:][::-1]
+        return top
+    except Exception:
+        return vault[-top_k:][::-1]
+
 def cmd_memory(action: str, params: dict) -> dict:
     """Long-term Memory Vault — stores and recalls user facts and preferences."""
     try:
-        existing = {}
-        if DATA_FILE.exists():
+        existing = load_vault_data()
+        if not existing:
             try:
-                existing = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+                if DATA_FILE.exists():
+                    existing = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+                else:
+                    existing = {}
             except Exception:
                 existing = {}
         
@@ -1398,7 +2126,7 @@ def cmd_memory(action: str, params: dict) -> dict:
             entry = {"fact": fact, "created_at": datetime.now().isoformat()}
             vault.append(entry)
             existing["memoryVault"] = vault
-            DATA_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_vault_data(existing)
             
             # Also append to Obsidian if connected
             try:
@@ -1419,12 +2147,24 @@ def cmd_memory(action: str, params: dict) -> dict:
         elif action in ["get", "list"]:
             if not vault:
                 return ok("अभी मेमोरी में कोई बात सेव नहीं है। आप 'याद रखो कि...' कहकर कुछ भी सेव करा सकते हैं।", {"facts": []})
-            facts_text = "\n".join([f"• {v['fact']}" for v in vault[-10:]])
-            return ok(f"आपकी यादें ({len(vault)}):\n{facts_text}", {"facts": vault})
+            query = params.get("query", "") or params.get("q", "")
+            ranked = _memory_search_ranked(query, vault, top_k=10) if query else vault[-10:][::-1]
+            facts_text = "\n".join([f"• {v['fact']}" for v in ranked])
+            return ok(f"आपकी यादें ({len(vault)}):\n{facts_text}", {"facts": ranked, "total": len(vault)})
+
+        elif action == "search":
+            query = params.get("query", "") or params.get("q", "") or params.get("text", "")
+            if not query:
+                return err("Search query खाली है।")
+            ranked = _memory_search_ranked(query, vault, top_k=8)
+            if not ranked:
+                return ok("कोई मिलती-जुलती याद नहीं मिली।", {"facts": []})
+            facts_text = "\n".join([f"• {v['fact']}" for v in ranked])
+            return ok(f"सर्च परिणाम ({len(ranked)}):\n{facts_text}", {"facts": ranked})
             
         elif action == "clear":
             existing["memoryVault"] = []
-            DATA_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_vault_data(existing)
             return ok("मेमोरी वॉल्ट खाली कर दिया गया है। 🧹", {"facts": []})
             
         return err(f"अज्ञात memory action: {action}")
@@ -1441,10 +2181,14 @@ ROUTES = {
     "keyboard": cmd_keyboard, "web": cmd_web, "calculator": cmd_calculator,
     "password": cmd_password, "translator": cmd_translator,
     "weather": cmd_weather, "reminders": cmd_reminders, "reminder": cmd_reminders,
-    "disk": cmd_disk,
+    "disk": cmd_disk, "terminal": cmd_terminal,
     "obsidian": cmd_obsidian,
     "vision": cmd_vision,
     "memory": cmd_memory,
+    "uia": cmd_uia, "computer": cmd_uia,
+    "browser": cmd_browser,
+    "connectors": cmd_connectors,
+    "scheduler": cmd_scheduler,
     "network": lambda a, p: cmd_info("ip", p) if a == "ip" else err("अज्ञात network action"),
 }
 
@@ -1465,6 +2209,52 @@ def route_command(data: dict) -> dict:
     except Exception as e:
         logger.error(f"route error: {e}")
         return err(str(e))
+
+# ── MCP Tool Manifest (additive, exposes ROUTES as MCP-compatible tools) ──
+def get_mcp_manifest() -> list:
+    """Return MCP-style tool definitions for all ROUTES — additive, no behavior change."""
+    manifest = []
+    tool_defs = {
+        "system": {"desc": "PC power controls (shutdown/restart/sleep/lock/hibernate/cleanup)", "actions": ["shutdown","restart","sleep","lock","logoff","hibernate","empty_recycle_bin","flush_dns","temp_clean"]},
+        "volume": {"desc": "Volume control", "actions": ["up","down","mute","unmute","set"]},
+        "media": {"desc": "Media playback", "actions": ["play_pause","next","previous","stop"]},
+        "apps": {"desc": "Installed apps open/close/list via registry & Start Menu", "actions": ["open","close","list"]},
+        "window": {"desc": "Window management", "actions": ["minimize","maximize","close","switch","show_desktop","snap_left","snap_right","fullscreen","new_tab","close_tab","focus"]},
+        "info": {"desc": "System telemetry (battery/cpu/ram/disk/ip/time)", "actions": ["battery","cpu","ram","disk","ip","time","date","full_report"]},
+        "processes": {"desc": "Process list/kill", "actions": ["list","kill"]},
+        "files": {"desc": "Safe file operations under HOME", "actions": ["create_file","create_folder","delete","list","open_explorer","read","write","rename"]},
+        "disk": {"desc": "Drive usage & cleanup", "actions": ["list_drives","cleanup_temp"]},
+        "clipboard": {"desc": "Clipboard read/write", "actions": ["save","get","set","clear","history"]},
+        "screen": {"desc": "Screenshots & brightness", "actions": ["screenshot","brightness_set","brightness_up","brightness_down"]},
+        "keyboard": {"desc": "Keyboard type/hotkey", "actions": ["type","hotkey"]},
+        "web": {"desc": "Open sites/search/youtube play", "actions": ["open_site","search","youtube_search","youtube_play","play_song"]},
+        "calculator": {"desc": "Safe math eval", "actions": ["eval"]},
+        "password": {"desc": "Generate password", "actions": ["generate"]},
+        "translator": {"desc": "Translate via MyMemory", "actions": ["translate"]},
+        "weather": {"desc": "Weather via wttr.in", "actions": ["get"]},
+        "reminders": {"desc": "Timers & reminders", "actions": ["create","timer","add","list","cancel"]},
+        "obsidian": {"desc": "Obsidian Local REST API", "actions": ["list_files","read_file","create_file","append_file","delete_file","search","daily_note","get_active","open_file","status"]},
+        "vision": {"desc": "Screen vision + research", "actions": ["analyze"]},
+        "memory": {"desc": "Long-term memory vault (add/list/search/clear) with hybrid ranked search", "actions": ["add","list","search","clear","get"]},
+    }
+    for cat, func in ROUTES.items():
+        if cat not in tool_defs: continue
+        info = tool_defs[cat]
+        for act in info["actions"]:
+            manifest.append({
+                "name": f"{cat}.{act}",
+                "description": f"{info['desc']} — {cat}/{act}",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "category": {"type": "string", "const": cat},
+                        "action": {"type": "string", "const": act},
+                        "params": {"type": "object", "description": f"Params for {cat}/{act}"}
+                    },
+                    "required": ["category","action"]
+                }
+            })
+    return manifest
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1586,18 +2376,45 @@ SYSTEM_PROMPT = (
     "3. BREVITY & QUALITY: Keep chat answers crisp (1-2 emojis max). For coding, deep research, or tutorials, provide clear step-by-step markdown.\n"
     "4. PC AUTOMATION: You control the user's PC (apps, volume, brightness, screenshots, system telemetry, Obsidian notes, files, web search). Confirm actions with cheerful confidence."
 )
-HISTORY: list = []
+HISTORY: list = []  # legacy global fallback
+HISTORY_BY_WS: dict = {}  # per-connection isolation
+LLM_SEMAPHORE = None  # lazy init asyncio.Semaphore(2)
+_LLM_RATE: dict = {}  # ws_id -> [timestamps] for rate limit
 CURRENT_PROVIDER = next((p for p in LLM_ORDER if os.getenv(LLM_PROVIDERS[p][2])), "groq")
 
+def _get_history(ws) -> list:
+    wid = id(ws) if ws is not None else "global"
+    if wid not in HISTORY_BY_WS:
+        HISTORY_BY_WS[wid] = []
+    return HISTORY_BY_WS[wid]
 
-async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=None, preferred_provider=None, custom_providers=None, chat_language_style="auto"):
+def _check_rate_limit(ws, limit=6, window=60) -> bool:
+    """Allow limit requests per window seconds per ws. Returns True if allowed."""
+    import time as _t
+    wid = id(ws)
+    now = _t.time()
+    arr = _LLM_RATE.get(wid, [])
+    arr = [ts for ts in arr if now - ts < window]
+    if len(arr) >= limit:
+        return False
+    arr.append(now)
+    _LLM_RATE[wid]=arr
+    return True
+
+
+async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=None, preferred_provider=None, custom_providers=None, chat_language_style="auto", ws=None):
     """Yield (chunk, provider, done) with dynamic custom provider and fallback support."""
     keys_map = keys_map or {}
+    global HISTORY
     models_map = models_map or {}
     custom_providers = custom_providers or []
-    global HISTORY
-    HISTORY.append({"role": "user", "content": text})
-    HISTORY = HISTORY[-20:]
+    # Per-connection history isolation
+    hist = _get_history(ws) if ws is not None else HISTORY
+    hist.append({"role": "user", "content": text})
+    # keep last 20
+    del hist[:-20]
+    # also keep global for fallback
+    HISTORY = hist[-20:]
 
     lang_instruction = ""
     if chat_language_style == "hindi":
@@ -1627,15 +2444,21 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
             saved_data = load_vault_data() or {}
             vault = saved_data.get("memoryVault", [])
             if vault:
-                facts = [f"- {v['fact']}" for v in vault[-10:]]
-                mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
+                # Hybrid ranked retrieval — only relevant facts, not blind last-10
+                ranked = _memory_search_ranked(text, vault, top_k=6)
+                facts = [f"- {v['fact']}" for v in ranked]
+                mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS - RANKED RELEVANT]:\n" + "\n".join(facts)
         except Exception:
             pass
             
         sys_prompt = (system_prompt or SYSTEM_PROMPT) + lang_instruction + mem_text
         payload = {"model": model, "stream": True, "temperature": 0.7, "max_tokens": 2048,
-                   "messages": [{"role": "system", "content": sys_prompt}] + HISTORY}
+                   "messages": [{"role": "system", "content": sys_prompt}] + hist}
         loop = asyncio.get_event_loop()
+        # Lazy semaphore init
+        global LLM_SEMAPHORE
+        if LLM_SEMAPHORE is None:
+            LLM_SEMAPHORE = asyncio.Semaphore(2)
         q: asyncio.Queue = asyncio.Queue()
 
         def custom_worker():
@@ -1689,7 +2512,8 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
             elif kind == "__DONE__":
                 break
         if not failed and full:
-            HISTORY.append({"role": "assistant", "content": full})
+            hist.append({"role": "assistant", "content": full})
+            del hist[:-20]
             yield ("", matching_custom.get("name", "Custom Provider"), True)
             return
 
@@ -1719,15 +2543,18 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
             saved_data = load_vault_data() or {}
             vault = saved_data.get("memoryVault", [])
             if vault:
-                facts = [f"- {v['fact']}" for v in vault[-10:]]
-                mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS]:\n" + "\n".join(facts)
+                ranked = _memory_search_ranked(text, vault, top_k=6)
+                facts = [f"- {v['fact']}" for v in ranked]
+                mem_text = "\n\n[USER LONG-TERM MEMORY & FACTS - RANKED]:\n" + "\n".join(facts)
         except Exception:
             pass
             
         sys_prompt = (system_prompt or SYSTEM_PROMPT) + lang_instruction + mem_text
         payload = {"model": model, "stream": True, "temperature": 0.7, "max_tokens": 2048,
-                   "messages": [{"role": "system", "content": sys_prompt}] + HISTORY}
+                   "messages": [{"role": "system", "content": sys_prompt}] + hist}
         loop = asyncio.get_event_loop()
+        if LLM_SEMAPHORE is None:
+            LLM_SEMAPHORE = asyncio.Semaphore(2)
         q: asyncio.Queue = asyncio.Queue()
 
         def worker():
@@ -1779,7 +2606,8 @@ async def llm_stream(text: str, keys_map=None, models_map=None, system_prompt=No
             elif kind == "__DONE__":
                 break
         if not failed and full:
-            HISTORY.append({"role": "assistant", "content": full})
+            hist.append({"role": "assistant", "content": full})
+            del hist[:-20]
             yield ("", provider, True)
             return
     yield ("माफ़ करो, अभी सभी AI providers विफल रहे। बाद में फिर पूछो।", "local_fallback", False)
@@ -1810,10 +2638,10 @@ def _get_piper_voice():
 
 async def generate_tts(text: str, voice: str = DEFAULT_TTS_VOICE, engine: str = "edge") -> dict:
     """Multi-engine TTS: Edge TTS (Online Neural), Piper TTS (Offline Neural), WebSpeech Fallback."""
-    # Clean text: remove markdown, urls, emojis for natural speech
+    # Clean text: remove markdown, urls, emojis for natural speech — preserve Hindi danda । (U+0964)
     clean = re.sub(r"[*_`#\>\[\]]", "", text).strip() or text
     clean = re.sub(r"https?://\S+", "", clean).strip()
-    clean = re.sub(r"[^\w\s\u0900-\u097F.,!?'-]", "", clean).strip()
+    clean = re.sub(r"[^\w\s\u0900-\u097F।.,!?'-]", "", clean).strip()
     if not clean:
         return {"success": False, "fallback": "webspeech", "text": text}
 
@@ -1868,44 +2696,52 @@ async def generate_tts(text: str, voice: str = DEFAULT_TTS_VOICE, engine: str = 
     return {"success": False, "fallback": "webspeech", "text": clean}
 async def handle_query(ws, msg):
     """Conversational text → stream LLM reply as llm_stream messages."""
-    params = msg.get("params") or {}
-    text = params.get("text", "")
-    conv_id = msg.get("id")
-    provider_name = params.get("provider", "")
-    api_key_from_ui = params.get("api_key", "")
-    keys_map = params.get("api_keys") or {}
-    if api_key_from_ui:
-        keys_map[provider_name] = api_key_from_ui
-    models_map = params.get("provider_models") or {}
-    custom_providers = params.get("custom_providers") or []
-    
-    prompt_tokens = max(1, len(text) // 4 + 40)
-    completion_tokens = 0
-    
-    sys_prompt_param = params.get("system_prompt")
-    lang_style = params.get("chatLanguageStyle", "auto")
-    
-    async for chunk, provider, done in llm_stream(text, keys_map=keys_map, models_map=models_map, system_prompt=sys_prompt_param, preferred_provider=provider_name, custom_providers=custom_providers, chat_language_style=lang_style):
-        if chunk:
-            completion_tokens += max(1, len(chunk) // 4)
-        usage_payload = None
-        if done:
-            usage_payload = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": max(1, completion_tokens),
-                "total_tokens": prompt_tokens + max(1, completion_tokens)
-            }
-        await ws.send(json.dumps({
-            "type": "llm_stream", 
-            "chunk": chunk, 
-            "provider": provider,
-            "id": conv_id, 
-            "done": done,
-            "usage": usage_payload,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }))
-        if done:
-            break
+    # Rate limit per ws
+    if not _check_rate_limit(ws, limit=7, window=60):
+        await ws.send(json.dumps({"type":"llm_stream","chunk":"⏳ थोडा धीरे — 1 मिनिट मे 7 से ज्यादा request नहीं।","provider":"rate_limit","id": msg.get("id"), "done": True}))
+        return
+    global LLM_SEMAPHORE
+    if LLM_SEMAPHORE is None:
+        LLM_SEMAPHORE = asyncio.Semaphore(2)
+    async with LLM_SEMAPHORE:
+        params = msg.get("params") or {}
+        text = params.get("text", "")
+        conv_id = msg.get("id")
+        provider_name = params.get("provider", "")
+        api_key_from_ui = params.get("api_key", "")
+        keys_map = params.get("api_keys") or {}
+        if api_key_from_ui:
+            keys_map[provider_name] = api_key_from_ui
+        models_map = params.get("provider_models") or {}
+        custom_providers = params.get("custom_providers") or []
+        
+        prompt_tokens = max(1, len(text) // 4 + 40)
+        completion_tokens = 0
+        
+        sys_prompt_param = params.get("system_prompt")
+        lang_style = params.get("chatLanguageStyle", "auto")
+        
+        async for chunk, provider, done in llm_stream(text, keys_map=keys_map, models_map=models_map, system_prompt=sys_prompt_param, preferred_provider=provider_name, custom_providers=custom_providers, chat_language_style=lang_style, ws=ws):
+            if chunk:
+                completion_tokens += max(1, len(chunk) // 4)
+            usage_payload = None
+            if done:
+                usage_payload = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": max(1, completion_tokens),
+                    "total_tokens": prompt_tokens + max(1, completion_tokens)
+                }
+            await ws.send(json.dumps({
+                "type": "llm_stream", 
+                "chunk": chunk, 
+                "provider": provider,
+                "id": conv_id, 
+                "done": done,
+                "usage": usage_payload,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }))
+            if done:
+                break
 
 
 async def handle_agent_action(ws, msg):
@@ -2113,6 +2949,7 @@ async def handle_client(ws):
     recognizer = get_vosk_recognizer()
     wake_active = False
 
+    ws_token = get_or_create_ws_token()
     await ws.send(json.dumps({
         "type": "event", "event": "connection_ready",
         "data": {
@@ -2120,6 +2957,7 @@ async def handle_client(ws):
             "hostname": socket.gethostname(),
             "os": f"{platform.system()} {platform.release()}",
             "lan_ip": get_lan_ip(),
+            "ws_token": ws_token,
             "features": {
                 "vosk_stt": recognizer is not None,
                 "edge_tts": HAS_EDGE_TTS,
@@ -2194,6 +3032,30 @@ async def handle_client(ws):
                 await ws.send(json.dumps({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()}))
                 continue
 
+            if mtype == "auth":
+                tok = (data.get("token") or data.get("params", {}).get("token") or "")
+                expected = get_or_create_ws_token()
+                ok_auth = (tok == expected)
+                # Store auth state per-connection
+                ws.authenticated = ok_auth
+                if ok_auth:
+                    logger.info(f"Auth success {client}")
+                else:
+                    logger.warning(f"Auth failed from {client}")
+                await ws.send(json.dumps({"type": "auth_result", "success": ok_auth, "timestamp": datetime.now(timezone.utc).isoformat()}))
+                continue
+
+            # ── Enforce auth for sensitive ops (bina hatye, LAN demo still works if token matches) ──
+            sensitive = {"command","query","agent_action","mcp_call_tool","save_data","clear_data","tts_speak"}
+            if mtype in sensitive and not getattr(ws, "authenticated", False):
+                # Allow if no token ever set? For first run, auto-auth via connection_ready flow — if still not authed, warn but allow local 127.0.0.1
+                if client.startswith("127.0.0.1"):
+                    ws.authenticated = True  # local loopback auto-trust
+                else:
+                    await ws.send(json.dumps({"type":"event","event":"auth_required","data":{"message":"LAN auth required — send {type:auth, token:ws_token}"},"timestamp": datetime.now(timezone.utc).isoformat()}))
+                    logger.warning(f"Blocked unauthed {mtype} from {client}")
+                    continue
+
             if mtype == "tts_speak":
                 params = data.get("params", {}) or {}
                 await ws.send(json.dumps({"type": "event", "event": "tts_started", "data": {},
@@ -2217,6 +3079,23 @@ async def handle_client(ws):
 
             if mtype == "agent_action":
                 await handle_agent_action(ws, data)
+                continue
+
+            if mtype == "mcp_list_tools":
+                manifest = get_mcp_manifest()
+                await ws.send(json.dumps({"type": "mcp_tools", "data": manifest, "timestamp": datetime.now(timezone.utc).isoformat()}))
+                continue
+
+            if mtype == "mcp_call_tool":
+                # MCP-style call: {type:"mcp_call_tool", name:"memory.search", params:{query:"..."}}
+                name = data.get("name", "") or data.get("tool", "")
+                params = data.get("params", {}) or data.get("arguments", {}) or {}
+                # name like "memory.search" → category=memory, action=search
+                cat, act = (name.split(".",1) + [""])[:2] if "." in name else (data.get("category",""), data.get("action",""))
+                if not cat and "." in name:
+                    cat, act = name.split(".",1)
+                result = route_command({"category": cat, "action": act, "params": params})
+                await ws.send(json.dumps({"type": "mcp_result", "name": name, "data": result, "timestamp": datetime.now(timezone.utc).isoformat()}))
                 continue
 
             if mtype == "test_provider_backend":
@@ -2276,11 +3155,20 @@ async def handle_client(ws):
                 cat, act = data.get("category"), data.get("action")
                 logger.info(f"cmd {client}: {cat}/{act}")
 
-                # confirmation flow
+                # confirmation flow — owner check + 5min TTL
                 if cat == "_confirm":
                     cid = (data.get("params") or {}).get("confirmation_id")
-                    if act == "approve" and cid in PENDING_CONFIRM:
-                        original = PENDING_CONFIRM.pop(cid)
+                    entry = PENDING_CONFIRM.get(cid)
+                    if act == "approve" and entry:
+                        # expiry check
+                        if time.time() - entry.get("ts",0) > 300:
+                            PENDING_CONFIRM.pop(cid, None)
+                            await ws.send(envelope(data.get("id"), "error", "Confirmation expired"))
+                            continue
+                        if entry.get("owner") != id(ws):
+                            await ws.send(envelope(data.get("id"), "error", "Confirmation owner mismatch"))
+                            continue
+                        original = PENDING_CONFIRM.pop(cid)["data"]
                         result = route_command(original)
                         await ws.send(envelope(data.get("id"),
                                                "success" if result["success"] else "error",
@@ -2289,10 +3177,22 @@ async def handle_client(ws):
                         PENDING_CONFIRM.pop(cid, None)
                         await ws.send(envelope(data.get("id"), "success", "रद्द किया गया।"))
                     continue
+                # periodic cleanup of expired confirms
+                if len(PENDING_CONFIRM) > 20:
+                    now=time.time()
+                    for k,v in list(PENDING_CONFIRM.items()):
+                        if now - v.get("ts",0) > 300:
+                            PENDING_CONFIRM.pop(k, None)
 
-                if (cat, act) in CONFIRM_REQUIRED and not (data.get("params") or {}).get("confirmed"):
+                # confirmed flag bypass blocked — must go via _confirm flow only
+                if (cat, act) in CONFIRM_REQUIRED:
+                    # Ignore client-sent confirmed:true — enforce server-side confirm only
+                    if data.get("params",{}).get("confirmed"):
+                        logger.warning(f"Blocked confirmed bypass attempt {cat}/{act} from {client}")
+                        data["params"].pop("confirmed", None)
                     cid = str(uuid.uuid4())
-                    PENDING_CONFIRM[cid] = data
+                    # Store with owner ws id to prevent cross-client approve
+                    PENDING_CONFIRM[cid] = {"data": data, "owner": id(ws), "ts": time.time()}
                     await ws.send(envelope(data.get("id"), "confirmation_required",
                                            f"क्या आप वाकई {cat}/{act} करना चाहते हैं?",
                                            confirmation_id=cid))

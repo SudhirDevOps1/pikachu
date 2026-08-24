@@ -92,6 +92,24 @@ export interface ProcessInfo {
   status: string;
 }
 
+export type ParticlePreset = "dots" | "stars" | "lines" | "bubbles" | "none";
+export type NeuralPreset = "cyber" | "matrix" | "royal" | "ocean" | "sunset" | "midnight";
+export type NameStyle = "hindi" | "hinglish" | "english" | "mono";
+
+export interface AppearanceSettings {
+  gridOpacity: number;
+  glassBlur: number;
+  fontScale: number;
+  animationSpeed: number;
+  showGrid: boolean;
+  showScanline: boolean;
+  hudBrightness: number;
+  orbScale: number;
+  particlePreset?: ParticlePreset;
+  neuralPreset?: NeuralPreset;
+  nameStyle?: NameStyle;
+}
+
 export interface AppSettings {
   theme: "dark" | "light";
   language: "hi" | "en";
@@ -120,6 +138,9 @@ export interface AppSettings {
   obsidianEnabled: boolean;
   obsidianUrl: string;
   obsidianApiKey: string;
+  nasaApiKey?: string;
+  ollamaUrl?: string;
+  appearance?: AppearanceSettings;
 }
 
 export interface CustomSubAgent {
@@ -169,7 +190,8 @@ export type TabName =
   | "reminders"
   | "processes"
   | "scheduler"
-  | "tools";
+  | "tools"
+  | "notes";
 
 export type ControlSubTab =
   | "system"
@@ -193,4 +215,25 @@ export type ToolsSubTab =
   | "calculator"
   | "translator"
   | "password"
-  | "text_expand";
+  | "text_expand"
+  | "terminal";
+
+export interface QuickNote {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  pinned?: boolean;
+  color?: string;
+}
+
+export interface PomodoroState {
+  status: "idle" | "focus" | "break" | "paused";
+  mode: "focus" | "break";
+  remainingSec: number;
+  focusMin: number;
+  breakMin: number;
+  completedSessions: number;
+  startedAt?: number;
+}

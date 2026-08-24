@@ -184,41 +184,55 @@ function FileManager() {
   );
 }
 
-// ---------- Clipboard ----------
+// ---------- Clipboard (enhanced: search, pin, bridge sync, export) ----------
 function ClipboardManager() {
-  const { processInput } = useAssistantApi();
+  const { processInput, sendRaw } = useAssistantApi();
   const history = useStore((s) => s.clipboardHistory);
   const addClipboard = useStore((s) => s.addClipboard);
+  const isConnected = useStore((s) => s.isConnected);
   const [text, setText] = useState("");
+  const [q, setQ] = useState("");
+  const [pinned, setPinned] = useState<Set<string>>(new Set());
+  const filtered = q.trim() ? history.filter((h)=> (h.content.toLowerCase().includes(q.toLowerCase()))) : history;
+  const syncFromBridge = () => {
+    if (!isConnected) { useStore.getState().addToast({ type:"info", message:"Bridge offline — local history only" }); return; }
+    sendRaw({ type:"command", category:"clipboard", action:"get", params:{}, id: Math.random().toString(36).slice(2), timestamp: new Date().toISOString() } as any);
+    useStore.getState().addToast({ type:"success", message:"Bridge clipboard fetch भेजा — response chat/toast में आएगा" });
+  };
   return (
     <div className="space-y-4">
-      <GlassCard className="p-4">
+      <GlassCard className="p-4 space-y-3">
         <div className="flex gap-2">
-          <input
-            value={text} onChange={(e) => setText(e.target.value)}
-            placeholder="टेक्स्ट सेव करें..."
-            className="flex-1 rounded-xl bg-white/5 px-4 py-2.5 text-white outline-none placeholder-white/30"
-          />
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="टेक्स्ट सेव करें..." className="flex-1 rounded-xl bg-white/5 px-4 py-2.5 text-white outline-none placeholder-white/30" />
           <GlowButton onClick={() => { if (text) { addClipboard(text); setText(""); processInput("save clipboard"); } }}><ClipboardCopy size={16} /> सेव</GlowButton>
           <GlowButton variant="danger" onClick={() => processInput("clear clipboard")}><Eraser size={16} /></GlowButton>
         </div>
+        <div className="flex flex-wrap gap-2">
+          <div className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-1.5 border border-white/10 flex-1 min-w-[160px]">
+            <Search size={14} className="text-white/40" />
+            <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="खोजो..." className="flex-1 bg-transparent text-xs text-white outline-none placeholder-white/30" />
+          </div>
+          <GlowButton onClick={syncFromBridge}><Clipboard size={14} /> Bridge Sync</GlowButton>
+          <GlowButton onClick={()=>{ const txt=filtered.map(h=>h.content).join("\n"); navigator.clipboard.writeText(txt).catch(()=>{}); useStore.getState().addToast({type:"success", message:"Export copied"})}}><ClipboardCopy size={14} /> Export</GlowButton>
+        </div>
       </GlassCard>
-      <GlassCard className="max-h-80 overflow-y-auto p-2">
-        {history.length === 0 ? (
-          <p className="p-6 text-center text-sm text-white/40">कोई क्लिपबोर्ड हिस्ट्री नहीं</p>
+      <GlassCard className="max-h-[380px] overflow-y-auto p-2">
+        {filtered.length === 0 ? (
+          <p className="p-6 text-center text-sm text-white/40">कोई क्लिपबोर्ड हिस्ट्री नहीं {q && "— खोज खाली"}</p>
         ) : (
-          history.map((h) => (
-            <button
-              key={h.id}
-              onClick={() => navigator.clipboard.writeText(h.content).catch(() => {})}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-white/5"
-            >
-              <Clipboard size={15} className="shrink-0 text-white/40" />
-              <span className="flex-1 truncate text-sm text-white/80">{h.content}</span>
-            </button>
+          filtered.map((h) => (
+            <div key={h.id} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 hover:bg-white/5 group">
+              <button onClick={() => navigator.clipboard.writeText(h.content).catch(() => {})} className="flex flex-1 items-center gap-3 text-left min-w-0">
+                <Clipboard size={15} className="shrink-0 text-white/40" />
+                <span className="flex-1 truncate text-sm text-white/80">{h.content}</span>
+                <span className="hidden sm:block text-[10px] text-white/20">{new Date(h.at).toLocaleTimeString("hi-IN")}</span>
+              </button>
+              <button onClick={()=> setPinned((s)=>{ const n=new Set(s); if(n.has(h.id)) n.delete(h.id); else n.add(h.id); return n; })} className={`shrink-0 rounded-lg px-2 py-1 text-xs ${pinned.has(h.id) ? "bg-amber-400/20 text-amber-200" : "bg-white/5 text-white/40 group-hover:text-white/70"}`}>{pinned.has(h.id) ? "Pinned" : "Pin"}</button>
+            </div>
           ))
         )}
       </GlassCard>
+      <p className="text-center text-[11px] text-white/25">💡 Bridge Sync से PC का असली clipboard history भी ला सकते हो (pyperclip) • Pin करके top पर रखो • Export से सब copy</p>
     </div>
   );
 }

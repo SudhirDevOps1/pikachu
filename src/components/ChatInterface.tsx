@@ -94,23 +94,25 @@ export function ChatInterface() {
           )}
         </AnimatePresence>
 
-        <div className="glass-strong flex items-center gap-3 rounded-2xl p-3">
+        <motion.div animate={{ boxShadow: isListening ? "0 0 0 2px rgba(239,68,68,0.35), 0 0 20px rgba(239,68,68,0.25)" : isAiThinking ? "0 0 0 2px rgba(234,179,8,0.25), 0 0 16px rgba(234,179,8,0.15)" : "0 4px 24px rgba(0,0,0,0.25)" }} className="glass-strong flex items-center gap-3 rounded-2xl p-3 border border-white/10">
           <VoiceButton onToggle={toggle} />
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="टाइप करो या माइक दबाओ..."
+            placeholder="टाइप करो या माइक दबाओ...  •  'futurist mode on' / 'bluetooth kholo' / 'create file test.txt'"
             className="flex-1 bg-transparent text-white placeholder-white/40 outline-none"
           />
-          <button
+          <motion.button
+            whileHover={{ scale: 1.06 }}
+            whileTap={{ scale: 0.94 }}
             onClick={send}
-            className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-md transition active:scale-95"
-            style={{ background: "linear-gradient(135deg, var(--accent), rgba(var(--accent-rgb), 0.8))" }}
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-md transition"
+            style={{ background: `linear-gradient(135deg, var(--accent), rgba(var(--accent-rgb), 0.85))`, boxShadow: `0 0 14px rgba(var(--accent-rgb),0.45)` }}
           >
             <Send size={18} />
-          </button>
-        </div>
+          </motion.button>
+        </motion.div>
       </div>
     </div>
   );

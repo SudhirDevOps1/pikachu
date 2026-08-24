@@ -22,6 +22,10 @@ const ACTIONS: QuickAction[] = [
   { icon: Calculator, label: "कैलक", cmd: "calculate 2+2", color: "#f59e0b" },
   { icon: Languages, label: "अनुवाद", cmd: "translate hello to hindi", color: "#8b5cf6" },
   { icon: Search, label: "सर्च", cmd: "search AI news", color: "#38bdf8" },
+  { icon: Globe, label: "Bluetooth", cmd: "bluetooth toggle", color: "#0ea5e9" },
+  { icon: Terminal, label: "Notepad", cmd: "notepad kholo", color: "#a3e635" },
+  { icon: Camera, label: "Futurist", cmd: "futurist mode on", color: "#f43f5e" },
+  { icon: Search, label: "WiFi", cmd: "wifi toggle", color: "#06b6d4" },
 ];
 
 export function QuickActionsBar() {

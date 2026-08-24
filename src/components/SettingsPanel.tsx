@@ -61,9 +61,54 @@ export function SettingsPanel() {
     setTesting((t) => ({ ...t, [provider]: false }));
   };
 
+  // ——— New: Tabbed navigation for scattered settings ———
+  const [activeCat, setActiveCat] = useState("general");
+  const [q, setQ] = useState("");
+  const CATS = [
+    { id: "general", label: "General", icon: Zap, desc: "AI Provider & Language" },
+    { id: "voice", label: "Voice", icon: Volume2, desc: "STT/TTS & Wake" },
+    { id: "appearance", label: "Appearance", icon: Palette, desc: "Theme • Grid • Glass" },
+    { id: "presets", label: "Presets", icon: Layers, desc: "Neural • Particle • Font" },
+    { id: "connections", label: "Connections", icon: Plug, desc: "Bridge • Mobile • Cloudflare" },
+    { id: "intelligence", label: "Intelligence", icon: Bot, desc: "Agents & Tokens" },
+    { id: "data", label: "Data", icon: Database, desc: "Stats • About" },
+  ] as const;
+  const matches = (text: string) => !q || text.toLowerCase().includes(q.toLowerCase());
+
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      <PanelHeader icon={Settings} title="सेटिंग्स" desc="पिका को अपने हिसाब से कस्टमाइज़ करें" />
+    <div className="mx-auto max-w-5xl">
+      <PanelHeader icon={Settings} title="सेटिंग्स" desc="पिका को अपने हिसाब से कस्टमाइज़ करें — बिखरा हुआ expand अब tabbed" />
+
+      {/* Search + tab bar */}
+      <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative flex-1 max-w-md">
+          <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search settings — theme, voice, bridge, token..." className="w-full rounded-xl bg-white/5 px-4 py-2.5 pl-9 text-sm text-white placeholder-white/30 outline-none border border-white/5 focus:border-[var(--accent)]/30" />
+          <Settings size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+        </div>
+        <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1 lg:pb-0">
+          {CATS.map(c=> {
+            const Icon=c.icon; const active=activeCat===c.id;
+            return <button key={c.id} onClick={()=>{setActiveCat(c.id); sounds.click();}} className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition ${active?"bg-[var(--accent)] text-black shadow-[0_0_14px_rgba(var(--accent-rgb),0.4)]":"bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"}`}><Icon size={13}/>{c.label}</button>
+          })}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-4 lg:flex-row">
+        {/* Left nav — desktop */}
+        <nav className="hidden lg:flex lg:w-[210px] shrink-0 flex-col gap-1.5 sticky top-4 self-start">
+          {CATS.map(c=> {
+            const Icon=c.icon; const active=activeCat===c.id;
+            return <button key={c.id} onClick={()=>setActiveCat(c.id)} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${active?"bg-white/[0.07] text-white border border-white/10 shadow-sm":"text-white/55 hover:bg-white/[0.04] hover:text-white"}`}>
+              <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${active?"bg-[var(--accent)] text-black":"bg-white/5"}`}><Icon size={14}/></span>
+              <span className="flex-1"><span className="block text-xs font-semibold leading-none">{c.label}</span><span className="block text-[10px] leading-none opacity-50">{c.desc}</span></span>
+              {active && <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] shadow-[0_0_6px_var(--accent)]" />}
+            </button>
+          })}
+        </nav>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0 space-y-4">
+          {(activeCat==="general" || q) && matches("AI Provider provider model groq gemini language persona") && <>
 
       {/* AI Provider */}
       <Section icon={Zap} title="AI प्रोवाइडर">
@@ -287,7 +332,9 @@ export function SettingsPanel() {
           </div>
         </div>
       </Section>
+      </>}
 
+      {(activeCat==="voice" || q) && matches("voice stt tts whisper vosk edge piper wake word") && <>
       {/* Voice */}
       {/* Voice Settings */}
       <Section icon={Volume2} title="आवाज़ और वॉइस सेटिंग्स">
@@ -393,7 +440,9 @@ export function SettingsPanel() {
           </GlowButton>
         </div>
       </Section>
+      </>}
 
+      {(activeCat==="appearance" || q) && matches("appearance theme accent grid glass blur font animation brightness orb") && <>
       {/* Appearance */}
       <Section icon={Palette} title="दिखावट">
         <div className="mb-4 flex items-center justify-between">
@@ -421,6 +470,14 @@ export function SettingsPanel() {
         </div>
       </Section>
 
+      {/* Advanced Appearance — Standard + Futurist */}
+      <AppearanceAdvancedSection />
+      </>}
+      {(activeCat==="presets" || activeCat==="appearance" || q) && matches("presets neural particle font name cyber matrix royal ocean sunset midnight fire aurora gold candy dots stars lines bubbles heart galaxy dna cube torus wave spiral inter playfair bebas dancing orbitron pacifico righteous lobster cinzel monoton hindi hinglish english mono") && <>
+      <PresetsSection />
+      </>}
+
+      {(activeCat==="connections" || q) && matches("connection bridge mobile cloudflare obsidian wifi tunnel") && <>
       {/* Connection */}
       <Section icon={Plug} title="कनेक्शन">
         <label className="mb-2 block text-xs text-white/50">ब्रिज URL</label>
@@ -433,7 +490,9 @@ export function SettingsPanel() {
           <GlowButton onClick={connect}>कनेक्ट करें</GlowButton>
         </div>
       </Section>
+      </>}
 
+      {(activeCat==="data" || q) && matches("stats data analytics") && <>
       {/* Stats */}
       <Section icon={Activity} title="आँकड़े">
         <div className="grid grid-cols-2 gap-3">
@@ -449,7 +508,9 @@ export function SettingsPanel() {
           </div>
         </div>
       </Section>
+      </>}
 
+      {(activeCat==="intelligence" || q) && matches("token usage cost analytics") && <>
       {/* Token Usage & Analytics */}
       <Section icon={Database} title="टोकन उपयोग और एनालिटिक्स (Token Usage & Cost)">
         {(() => {
@@ -526,7 +587,9 @@ export function SettingsPanel() {
           );
         })()}
       </Section>
+      </>}
 
+      {(activeCat==="data" || q) && matches("data management delete pika_data") && <>
       {/* Data Management */}
       <Section icon={Database} title="डेटा मैनेजमेंट">
         <p className="mb-3 text-xs text-white/50">
@@ -546,22 +609,39 @@ export function SettingsPanel() {
           <span>सारा डेटा डिलीट करें</span>
         </button>
       </Section>
+      </>}
 
+      {(activeCat==="intelligence" || q) && matches("sub agent swarm intelligence") && <>
       {/* Sub-Agent Swarm Section */}
       <SubAgentsSection />
+      </>}
 
+      {(activeCat==="general" || q) && matches("custom provider ai") && <>
       {/* Custom AI Providers */}
       <CustomProvidersSection />
+      </>}
 
+      {(activeCat==="connections" || q) && matches("mobile access phone wifi") && <>
       {/* Mobile Access */}
       <MobileAccessSection />
+      </>}
 
+      {(activeCat==="connections" || q) && matches("cloudflare pages tunnel") && <>
+      {/* Cloudflare Pages + Local Backend Analysis */}
+      <CloudflareDeploymentSection />
+      </>}
+
+      {(activeCat==="connections" || q) && matches("obsidian vault notes") && <>
       {/* Obsidian Integration */}
       <ObsidianSection />
+      </>}
 
+      {(activeCat==="connections" || q) && matches("setup troubleshooting bridge") && <>
       {/* Setup troubleshooting */}
       <SetupSection />
+      </>}
 
+      {(activeCat==="data" || q) && matches("about info pika") && <>
       {/* About */}
       <Section icon={Info} title="जानकारी">
         <div className="space-y-1 text-sm text-white/60">
@@ -570,7 +650,193 @@ export function SettingsPanel() {
           <p className="text-xs text-white/40">MIT License · React + Vite + Python</p>
         </div>
       </Section>
+      </>}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function AppearanceAdvancedSection() {
+  const settings = useStore((s) => s.settings);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const a = settings.appearance || { gridOpacity: 0.06, glassBlur: 30, fontScale: 1, animationSpeed: 1, showGrid: true, showScanline: true, hudBrightness: 1, orbScale: 1 };
+  const upd = (p: Partial<typeof a>) => updateSettings({ appearance: { ...a, ...p } as any });
+  const reset = () => updateSettings({ appearance: { gridOpacity: 0.06, glassBlur: 30, fontScale: 1, animationSpeed: 1, showGrid: true, showScanline: true, hudBrightness: 1, orbScale: 1 } as any });
+
+  return (
+    <Section icon={Palette} title="🎨 Advanced Appearance — Standard + Futurist (bina kuch hataye)">
+      <p className="mb-3 text-xs text-white/50">Standard aur Futurist dono ke liye — grid, glass, font, animation, brightness sab control. Theme dropdown hide fix portal se ho gaya hai (z-9999).</p>
+      <div className="grid gap-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-white/70">Grid दिखाएँ</span>
+          <Toggle on={!!a.showGrid} onClick={() => upd({ showGrid: !a.showGrid })} />
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-white/70">Scanline</span>
+          <Toggle on={!!a.showScanline} onClick={() => upd({ showScanline: !a.showScanline })} />
+        </div>
+        {[
+          { k: "gridOpacity", label: "Grid Opacity", min: 0, max: 0.2, step: 0.01, val: a.gridOpacity },
+          { k: "glassBlur", label: "Glass Blur (px)", min: 10, max: 60, step: 2, val: a.glassBlur },
+          { k: "fontScale", label: "Font Scale", min: 0.85, max: 1.25, step: 0.05, val: a.fontScale },
+          { k: "animationSpeed", label: "Animation Speed", min: 0.5, max: 2, step: 0.1, val: a.animationSpeed },
+          { k: "hudBrightness", label: "HUD Brightness", min: 0.8, max: 1.3, step: 0.05, val: a.hudBrightness },
+          { k: "orbScale", label: "Orb Scale (Futurist)", min: 0.8, max: 1.3, step: 0.05, val: a.orbScale },
+        ].map((f) => (
+          <div key={f.k} className="space-y-1">
+            <div className="flex justify-between text-xs text-white/60"><span>{f.label}</span><span className="font-mono text-cyan-300">{f.val}</span></div>
+            <input type="range" min={f.min} max={f.max} step={f.step} value={f.val} onChange={(e) => upd({ [f.k]: parseFloat(e.target.value) } as any)} className="w-full" style={{ accentColor: "var(--accent)" }} />
+          </div>
+        ))}
+        <div className="flex gap-2 pt-1">
+          <GlowButton onClick={reset}>↺ Reset Default</GlowButton>
+          <span className="text-[11px] text-white/30 self-center">Changes live — dono modes pe turant</span>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function PresetsSection() {
+  const settings = useStore((s) => s.settings);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const a = settings.appearance || { gridOpacity: 0.06, glassBlur: 30, fontScale: 1, animationSpeed: 1, showGrid: true, showScanline: true, hudBrightness: 1, orbScale: 1, particlePreset: "dots" as any, neuralPreset: "cyber" as any, nameStyle: "hinglish" as any };
+  // Analysis of Particle-System-Pro: 9 shapes + 10 fonts + 8 themes + 40k particles — mapped to presets
+  const NEURAL = [
+    { id: "cyber", name: "Cyber Neon", desc: "Cyan/Magenta", accent: "#00f0ff", secondary: "#ff00ff", gridOpacity: 0.06, anim: 1, orb: 1 },
+    { id: "matrix", name: "Matrix", desc: "Green mono", accent: "#00ff41", secondary: "#003300", gridOpacity: 0.09, anim: 0.8, orb: 1.1 },
+    { id: "royal", name: "Royal", desc: "Purple/Pink", accent: "#7c3aed", secondary: "#ec4899", gridOpacity: 0.05, anim: 1, orb: 1 },
+    { id: "ocean", name: "Ocean", desc: "Blue/Cyan", accent: "#06b6d4", secondary: "#0ea5e9", gridOpacity: 0.07, anim: 1.1, orb: 0.95 },
+    { id: "sunset", name: "Sunset", desc: "Orange/Red", accent: "#f97316", secondary: "#ef4444", gridOpacity: 0.06, anim: 1.2, orb: 1.05 },
+    { id: "midnight", name: "Midnight", desc: "Dark minimal", accent: "#334155", secondary: "#0f172a", gridOpacity: 0.03, anim: 0.7, orb: 0.9 },
+    { id: "fire", name: "Fire", desc: "Red/Gold — Pro Theme", accent: "#ef4444", secondary: "#f59e0b", gridOpacity: 0.08, anim: 1.3, orb: 1.12 },
+    { id: "aurora", name: "Aurora", desc: "Teal/Violet", accent: "#10b981", secondary: "#8b5cf6", gridOpacity: 0.07, anim: 1, orb: 1 },
+    { id: "gold", name: "Gold", desc: "Amber/Yellow", accent: "#eab308", secondary: "#fde68a", gridOpacity: 0.05, anim: 0.9, orb: 0.98 },
+    { id: "candy", name: "Candy", desc: "Pink/Cyan — Pro", accent: "#ec4899", secondary: "#06b6d4", gridOpacity: 0.08, anim: 1.15, orb: 1.08 },
+  ];
+  // Particle-System-Pro shapes + base particles — 12 presets
+  const PARTICLES = [
+    { id: "dots", label: "Dots", desc: "Classic 40", icon: "• • •", shape: "dots" },
+    { id: "stars", label: "Stars", desc: "Twinkle", icon: "✦ ✧", shape: "star" },
+    { id: "lines", label: "Lines", desc: "Network", icon: "╱╲", shape: "wave" },
+    { id: "bubbles", label: "Bubbles", desc: "Floating", icon: "○ ◌", shape: "sphere" },
+    { id: "heart", label: "Heart", desc: "Pro Heart", icon: "♥", shape: "heart" },
+    { id: "galaxy", label: "Galaxy", desc: "Spiral", icon: "🌀", shape: "galaxy" },
+    { id: "dna", label: "DNA", desc: "Helix", icon: "🧬", shape: "dna" },
+    { id: "cube", label: "Cube", desc: "3D Cube", icon: "⬢", shape: "cube" },
+    { id: "torus", label: "Torus", desc: "Donut", icon: "◎", shape: "torus" },
+    { id: "wave", label: "Wave", desc: "Ripple", icon: "〰️", shape: "wave" },
+    { id: "spiral", label: "Spiral", desc: "Pro Spiral", icon: "🌀", shape: "spiral" },
+    { id: "none", label: "None", desc: "Off", icon: "—", shape: "none" },
+  ];
+  const FONTS = [
+    { id: "inter", label: "Inter", css: "Inter, sans-serif" },
+    { id: "playfair", label: "Playfair", css: "'Playfair Display', serif" },
+    { id: "bebas", label: "Bebas", css: "'Bebas Neue', sans-serif" },
+    { id: "dancing", label: "Dancing", css: "'Dancing Script', cursive" },
+    { id: "orbitron", label: "Orbitron", css: "Orbitron, monospace" },
+    { id: "pacifico", label: "Pacifico", css: "Pacifico, cursive" },
+    { id: "righteous", label: "Righteous", css: "Righteous, sans-serif" },
+    { id: "lobster", label: "Lobster", css: "Lobster, cursive" },
+    { id: "cinzel", label: "Cinzel", css: "Cinzel, serif" },
+    { id: "monoton", label: "Monoton", css: "Monoton, cursive" },
+  ];
+  const NAMES = [
+    { id: "hindi", label: "Hindi", desc: "शुद्ध हिंदी", lang: "hindi" },
+    { id: "hinglish", label: "Hinglish", desc: "Roman mix", lang: "hinglish" },
+    { id: "english", label: "English", desc: "Pure English", lang: "english" },
+    { id: "mono", label: "Mono", desc: "Code", lang: "auto" },
+  ];
+  const applyNeural = (p: typeof NEURAL[0]) => {
+    updateSettings({ accentColor: p.accent, secondaryAccentColor: p.secondary, appearance: { ...a, gridOpacity: p.gridOpacity, animationSpeed: p.anim, orbScale: p.orb, neuralPreset: p.id as any } as any });
+  };
+  const applyParticle = (p: typeof PARTICLES[0]) => {
+    const on = p.id !== "none";
+    updateSettings({ particles: on, appearance: { ...a, particlePreset: p.id as any } as any });
+    // Also set CSS var for ParticleBackground shape hint
+    try { document.documentElement.style.setProperty("--particle-shape", p.shape); } catch {}
+  };
+  const applyFont = (f: typeof FONTS[0]) => {
+    updateSettings({ appearance: { ...a, nameStyle: f.id as any } as any });
+    try { document.documentElement.style.setProperty("--pika-font", f.css); } catch {}
+  };
+  const applyName = (n: typeof NAMES[0]) => {
+    updateSettings({ chatLanguageStyle: n.lang as any, appearance: { ...a, nameStyle: n.id as any } as any });
+  };
+  const exportPreset = () => {
+    const data = { accent: settings.accentColor, secondary: settings.secondaryAccentColor, appearance: a, chatLanguageStyle: settings.chatLanguageStyle, ts: new Date().toISOString(), source: "Particle-System-Pro-inspired" };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const ael = document.createElement("a"); ael.href = url; ael.download = `pika-preset-${Date.now()}.json`; ael.click(); URL.revokeObjectURL(url);
+  };
+  const importPreset = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    const r = new FileReader(); r.onload = () => { try { const d = JSON.parse(String(r.result)); if (d.accent) updateSettings({ accentColor: d.accent }); if (d.secondary) updateSettings({ secondaryAccentColor: d.secondary }); if (d.appearance) updateSettings({ appearance: { ...a, ...d.appearance } as any }); if (d.chatLanguageStyle) updateSettings({ chatLanguageStyle: d.chatLanguageStyle }); } catch {} }; r.readAsText(f);
+  };
+  return (
+    <Section icon={Layers} title="🎨 Presets — Neural • Particle • Font • Name (choose & apply)">
+      <p className="mb-3 text-xs text-white/50">Particle-System-Pro analysis: 9 shapes (Heart/Sphere/Torus/Galaxy/DNA/Cube/Wave/Star/Spiral) + 10 fonts + 8 themes + 40k particles + audio/magnetic/ripple — yahan presets me map kiya. Bina kuch hataye.</p>
+      <div className="space-y-4">
+        <div>
+          <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-white/70">Neural HUD — 10 Themes (Pro)</span><span className="text-[10px] text-white/30">40k vibe</span></div>
+          <div className="grid grid-cols-5 gap-2">
+            {NEURAL.map(p => {
+              const active = (a as any).neuralPreset === p.id;
+              return <button key={p.id} onClick={() => applyNeural(p)} className={`rounded-xl p-2 text-left border transition ${active ? "border-[var(--accent)] bg-[var(--accent)]/15" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"}`}>
+                <div className="h-7 w-full rounded-lg mb-1.5 border border-white/5" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.secondary})` }} />
+                <div className="text-xs font-bold text-white leading-none">{p.name}</div>
+                <div className="text-[10px] text-white/40">{p.desc}</div>
+                {active && <span className="mt-1 inline-block rounded bg-emerald-500/20 px-1.5 py-0.5 text-[9px] text-emerald-300">✓ Active</span>}
+              </button>
+            })}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-white/70">Particles — 12 Shapes (Pro morph)</span><span className="text-[10px] text-white/30">Three.js vibe</span></div>
+          <div className="grid grid-cols-6 gap-1.5">
+            {PARTICLES.map(p => {
+              const active = ((a as any).particlePreset || (settings.particles ? "dots" : "none")) === p.id;
+              return <button key={p.id} onClick={() => applyParticle(p)} className={`rounded-xl p-2 text-center border transition ${active ? "border-cyan-400 bg-cyan-400/15 text-cyan-300" : "border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]"}`}>
+                <div className="text-sm">{p.icon}</div>
+                <div className="text-[11px] font-semibold leading-none">{p.label}</div>
+                <div className="text-[9px] opacity-60">{p.desc}</div>
+              </button>
+            })}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-xs font-semibold text-white/70">Fonts — 10 Switchable (Pro text morph)</div>
+          <div className="grid grid-cols-5 gap-1.5">
+            {FONTS.map(f => {
+              const active = (a as any).nameStyle === f.id;
+              return <button key={f.id} onClick={() => applyFont(f)} style={{ fontFamily: f.css }} className={`rounded-xl p-2 text-center border transition ${active ? "border-purple-400 bg-purple-500/15 text-purple-200" : "border-white/10 bg-white/[0.03] text-white/60"}`}>
+                <div className="text-xs font-bold truncate">Aa</div>
+                <div className="text-[10px] truncate">{f.label}</div>
+              </button>
+            })}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-xs font-semibold text-white/70">Name / Language</div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {NAMES.map(n => {
+              const active = ((a as any).nameStyle || settings.chatLanguageStyle) === n.id || ((a as any).nameStyle === undefined && settings.chatLanguageStyle === n.lang);
+              return <button key={n.id} onClick={() => applyName(n)} className={`rounded-xl p-2 text-center border transition ${active ? "border-purple-400 bg-purple-500/15 text-purple-200" : "border-white/10 bg-white/[0.03] text-white/60"}`}>
+                <div className="text-xs font-bold">{n.label}</div>
+                <div className="text-[10px] opacity-60">{n.desc}</div>
+              </button>
+            })}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
+          <button onClick={exportPreset} className="rounded-lg bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white">⬇️ Export Preset JSON</button>
+          <label className="rounded-lg bg-white/5 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white cursor-pointer">⬆️ Import JSON<input type="file" accept=".json" className="hidden" onChange={importPreset} /></label>
+          <button onClick={() => { const ids = NEURAL.map(n=>n.id); const pick = NEURAL[Math.floor(Math.random()*NEURAL.length)]; applyNeural(pick); const p = PARTICLES[Math.floor(Math.random()*PARTICLES.length)]; applyParticle(p); }} className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-bold text-black">🎲 Randomize Pro</button>
+          <span className="text-[11px] text-white/30 self-center">Bina kuch hataye — export/import + randomize</span>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -1230,6 +1496,113 @@ function MobileAccessSection() {
         >
           {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
         </button>
+      </div>
+    </Section>
+  );
+}
+
+function CloudflareDeploymentSection() {
+  const settings = useStore((s) => s.settings);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const ip = useLocalIP();
+  const [pagesUrl, setPagesUrl] = useState(() => localStorage.getItem("pika_cf_pages_url") || "https://pika.pages.dev");
+  const [tunnelUrl, setTunnelUrl] = useState(() => localStorage.getItem("pika_cf_tunnel_url") || "");
+  const [copied, setCopied] = useState<string | null>(null);
+  const isConnected = useStore((s) => s.isConnected);
+
+  const savePages = (v: string) => { setPagesUrl(v); localStorage.setItem("pika_cf_pages_url", v); };
+  const saveTunnel = (v: string) => { setTunnelUrl(v); localStorage.setItem("pika_cf_tunnel_url", v); };
+
+  const bridgeWs = settings.bridgeUrl || `ws://${ip}:8765`;
+  const token = (() => { try { return localStorage.getItem("pika_ws_token") || ""; } catch { return ""; } })();
+  const autoLink = (() => {
+    if (!pagesUrl) return "";
+    const base = pagesUrl.replace(/\/$/, "");
+    const params = new URLSearchParams();
+    if (bridgeWs && bridgeWs !== "ws://localhost:8765") params.set("bridge", bridgeWs);
+    else if (tunnelUrl) params.set("bridge", tunnelUrl);
+    else params.set("bridge", bridgeWs);
+    if (token) params.set("token", token.slice(0,16));
+    // Cloudflare Tunnel wss hint
+    if (tunnelUrl && tunnelUrl.startsWith("wss://")) params.set("mode", "tunnel");
+    return `${base}?${params.toString()}`;
+  })();
+
+  const copyText = (t: string, id: string) => {
+    navigator.clipboard.writeText(t);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  return (
+    <Section icon={Database} title="☁️ Cloudflare Pages + Local Backend — Analysis & Auto-Connect">
+      <p className="mb-3 text-xs text-white/50">Frontend Cloudflare Pages pe live, Backend local PC pe — kya achha, kya bekar, idea only (fix nahi). Browser me khule to websocket auto-connect link se kaise jode — yahi setting.</p>
+
+      {/* Analysis */}
+      <div className="grid gap-3 md:grid-cols-2 mb-4">
+        <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3">
+          <div className="text-xs font-bold text-emerald-300 mb-1.5">✅ Achha kya hai</div>
+          <ul className="space-y-1 text-[11px] text-white/70 leading-relaxed">
+            <li>• CDN global edge — Pages `https://pika.pages.dev` free, `dist/index.html` single-file seedha upload.</li>
+            <li>• Phone QR se `?bridge=wss://` link — install bina demo, `PWA` cache offline shell.</li>
+            <li>• `git push` auto deploy, `electron` alag — web demo + desktop full control parallel.</li>
+            <li>• `wss://` tunnel se 4G se bhi local PC control (Dispatch jaisa).</li>
+          </ul>
+        </div>
+        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3">
+          <div className="text-xs font-bold text-red-300 mb-1.5">⚠️ Bekar / Tutega kya</div>
+          <ul className="space-y-1 text-[11px] text-white/70 leading-relaxed">
+            <li>• `https` page → `ws://localhost` <b>Mixed Content Block</b> — browser `ws://` ko rok dega, `wss://` + cert chahiye.</li>
+            <li>• `192.168.1.x` NAT — bahar se 4G connect nahi, dynamic IP, firewall.</li>
+            <li>• Offline demo khatam — Pages ko net chahiye, PC band to frontend khulega par bridge dead.</li>
+            <li>• Latency +15-30ms tunnel hop, `HOST 0.0.0.0` khula to WiFi attacker scan.</li>
+          </ul>
+        </div>
+      </div>
+
+      {/* Ideas */}
+      <div className="rounded-xl bg-cyan-500/10 border border-cyan-500/20 p-3 mb-4">
+        <div className="text-xs font-bold text-cyan-300 mb-1.5">💡 Idea — bina kuch hataye (additive)</div>
+        <ul className="space-y-1 text-[11px] text-white/70">
+          <li>• <b>Cloudflared Tunnel</b> `cloudflared tunnel --url http://localhost:8765` → public `wss://pika-xxx.trycloudflare.com` — auto cert, no port-forward, `VITE_BRIDGE_URL=wss://...` Pages env me.</li>
+          <li>• <b>Tailscale Funnel</b> private VPN — `wss://pika.tailnet.ts.net` — `ws_token` + Origin allowlist.</li>
+          <li>• <b>BridgeUrl Env</b> `VITE_BRIDGE_URL` + `?bridge=` query override — browser link se auto-connect, fallback `ws://localhost:8765`.</li>
+          <li>• <b>Hybrid</b>: Pages = demo/landing (read-only), Electron = full offline sab control — user choose.</li>
+        </ul>
+      </div>
+
+      {/* Config */}
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-xs text-white/50">Cloudflare Pages URL (frontend live)</label>
+          <div className="flex gap-2">
+            <input value={pagesUrl} onChange={e=>savePages(e.target.value)} placeholder="https://pika.pages.dev" className="flex-1 rounded-lg bg-white/5 px-3 py-2 font-mono text-xs text-white outline-none placeholder-white/30" />
+            <button onClick={()=>copyText(pagesUrl,"pages")} className="rounded-lg bg-white/10 px-3 text-xs text-white/70 hover:text-white">{copied==="pages"?<Check size={14} className="text-green-400"/>:<Copy size={14}/>}</button>
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-white/50">Tunnel WSS URL (cloudflared / Tailscale) — khali to LAN ws:// use hoga</label>
+          <div className="flex gap-2">
+            <input value={tunnelUrl} onChange={e=>saveTunnel(e.target.value)} placeholder="wss://pika-xxx.trycloudflare.com" className="flex-1 rounded-lg bg-white/5 px-3 py-2 font-mono text-xs text-white outline-none placeholder-white/30" />
+            <button onClick={()=>copyText(tunnelUrl,"tunnel")} className="rounded-lg bg-white/10 px-3 text-xs text-white/70 hover:text-white">{copied==="tunnel"?<Check size={14} className="text-green-400"/>:<Copy size={14}/>}</button>
+          </div>
+          <p className="mt-1 text-[10px] text-white/30">Local LAN test: <code className="bg-white/10 px-1 rounded text-cyan-300">ws://{ip}:8765</code> · Tunnel command: <code className="bg-white/10 px-1 rounded">cloudflared tunnel --url http://localhost:8765</code></p>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-white/50">Current Bridge URL (local backend) — Settings → Connection se sync</label>
+          <div className="flex gap-2">
+            <input value={bridgeWs} onChange={e=>updateSettings({ bridgeUrl: e.target.value })} className="flex-1 rounded-lg bg-white/5 px-3 py-2 font-mono text-xs text-white outline-none" />
+            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${isConnected?"bg-emerald-500/20 text-emerald-300":"bg-red-500/20 text-red-300"}`}>{isConnected?"ONLINE":"OFFLINE"}</span>
+          </div>
+        </div>
+        <div className="rounded-xl bg-white/[0.06] p-3 border border-white/10">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-semibold text-white">🔗 Auto-Connect Link (browser me khule to websocket auto-connect)</span>
+            <button onClick={()=>copyText(autoLink,"autolink")} className="flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-bold text-black hover:opacity-90">{copied==="autolink"?<Check size={14}/>:<Copy size={14}/>} {copied==="autolink"?"Copied":"Copy Link"}</button>
+          </div>
+          <code className="block break-all rounded bg-black/40 p-2 font-mono text-[11px] text-cyan-300">{autoLink}</code>
+          <p className="mt-2 text-[11px] text-white/40">Kaise kaam karega: Browser `?bridge=wss://...&token=xxx` dekhega → `src/hooks/useAssistant.ts` `connect()` me `URLSearchParams` se `bridgeUrl` override → `localStorage:pika_ws_token` auto `auth` → direct `wss` connect, `wss` fail to `ws://localhost:8765` fallback. Link ko QR banao aur phone se scan karo — same WiFi/4G (tunnel pe) se bina type kiye connect.</p>
+        </div>
       </div>
     </Section>
   );

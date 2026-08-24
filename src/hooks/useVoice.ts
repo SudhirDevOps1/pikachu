@@ -49,10 +49,18 @@ export function useVoice(onFinal: (text: string) => void, sendRaw?: (msg: any) =
 
   const startListening = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: { ideal: 16000 } as any,
+          channelCount: { ideal: 1 } as any,
+        } as any,
+      });
       streamRef.current = stream;
       const AC = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AC({ sampleRate: 16000 });
+      const ctx = new AC({ sampleRate: 48000 }); // use native rate, resample via worklet to 16k
       if (ctx.state === "suspended") {
         await ctx.resume();
       }
@@ -69,27 +77,62 @@ export function useVoice(onFinal: (text: string) => void, sendRaw?: (msg: any) =
         if (useStore.getState().isConnected && sendRaw) {
           sendRaw(JSON.stringify({ type: "voice_start", engine: sttEngine }));
         }
-        // Add ScriptProcessor for sending binary PCM16 audio to backend (Vosk/Whisper STT)
-        const processor = ctx.createScriptProcessor(4096, 1, 1);
-        processor.onaudioprocess = (e) => {
-          if (!useStore.getState().isListening) return;
-          if (useStore.getState().isConnected && sendRaw) {
-            const channel = e.inputBuffer.getChannelData(0);
-            const pcm16 = new Int16Array(channel.length);
-            for (let i = 0; i < channel.length; i++) {
-              let s = Math.max(-1, Math.min(1, channel[i]));
-              pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            sendRaw(pcm16.buffer);
+        // Modern AudioWorklet with ScriptProcessor fallback + simple VAD gate
+        let workletNode: AudioWorkletNode | null = null;
+        let vadSilenceMs = 0;
+        let lastVoiceMs = Date.now();
+        const tryWorklet = async () => {
+          try {
+            await ctx.audioWorklet.addModule('/audio-worklet-processor.js');
+            workletNode = new AudioWorkletNode(ctx, 'pika-pcm-processor');
+            workletNode.port.onmessage = (e: MessageEvent) => {
+              if (!useStore.getState().isListening) return;
+              if (!useStore.getState().isConnected || !sendRaw) return;
+              // Simple energy VAD — skip near-silence packets to save bandwidth
+              const pcm = new Int16Array(e.data);
+              let energy = 0;
+              for (let i = 0; i < pcm.length; i++) energy += Math.abs(pcm[i]);
+              energy /= pcm.length;
+              const isSilence = energy < 300; // ~ -50dB
+              if (isSilence) {
+                vadSilenceMs += (pcm.length / 16000) * 1000;
+                if (vadSilenceMs > 1800) return; // drop long silence
+              } else {
+                vadSilenceMs = 0;
+                lastVoiceMs = Date.now();
+              }
+              sendRaw(e.data);
+            };
+            source.connect(workletNode);
+            // Keep node alive without feedback
+            const gain = ctx.createGain();
+            gain.gain.value = 0;
+            workletNode.connect(gain);
+            gain.connect(ctx.destination);
+            // Also keep analyser for waveform via source→analyser (already connected)
+          } catch (ex) {
+            console.warn('AudioWorklet failed, falling back to ScriptProcessor', ex);
+            // Deprecated fallback for old browsers
+            const processor = (ctx as any).createScriptProcessor(4096, 1, 1);
+            processor.onaudioprocess = (ev: any) => {
+              if (!useStore.getState().isListening) return;
+              if (!useStore.getState().isConnected || !sendRaw) return;
+              const channel = ev.inputBuffer.getChannelData(0);
+              const pcm16 = new Int16Array(channel.length);
+              for (let i = 0; i < channel.length; i++) {
+                let s = Math.max(-1, Math.min(1, channel[i]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
+              sendRaw(pcm16.buffer);
+            };
+            analyser.connect(processor);
+            const gain2 = ctx.createGain();
+            gain2.gain.value = 0;
+            processor.connect(gain2);
+            gain2.connect(ctx.destination);
           }
         };
-        analyser.connect(processor);
-        
-        // Prevent feedback loop while keeping the node active
-        const gain = ctx.createGain();
-        gain.gain.value = 0;
-        processor.connect(gain);
-        gain.connect(ctx.destination);
+        await tryWorklet();
       }
 
       setListening(true);

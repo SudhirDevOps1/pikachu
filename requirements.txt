@@ -1,5 +1,6 @@
 # === Core (required) ===
-websockets>=12.0
+websockets>=13.0
+apscheduler>=3.10.0
 
 # === Voice: STT & TTS ===
 vosk>=0.3.45
@@ -15,7 +16,7 @@ wmi>=1.5.1; sys_platform == "win32"
 pywin32>=306; sys_platform == "win32"
 
 # === Security & Vault Storage ===
-cryptography>=42.0.0
+cryptography>=43.0.0
 
 # === Agent Mode & Research ===
 agent-mini
@@ -24,6 +25,12 @@ duckduckgo-search>=6.0.0
 
 # === System info & Networking ===
 psutil>=5.9.0
-requests>=2.31.0
+requests>=2.32.2
 python-dotenv>=1.0.0
-aiohttp>=3.9.0
+aiohttp>=3.9.5
+# === Optional: Browser CADP ===
+# playwright>=1.48.0  # pip install playwright && playwright install chromium (for cmd_browser real DOM)
+
+# === Testing (additive) ===
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

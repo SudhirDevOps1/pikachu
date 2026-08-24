@@ -17,8 +17,10 @@ export default defineConfig({
     },
   },
   server: {
-    host: "0.0.0.0", // Allows access from mobile devices on the same WiFi
+    host: "127.0.0.1", // default LAN disabled — set to 0.0.0.0 for phone via .env VITE_HOST=0.0.0.0
     port: 3000,
     open: false,
+    strictPort: true,
   },
+  test: { environment: 'jsdom', globals: true },
 });

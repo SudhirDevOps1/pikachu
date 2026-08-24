@@ -1,4 +1,5 @@
-import { Sun, Moon, Zap, Wifi, WifiOff, Sparkles } from "lucide-react";
+import { Sun, Moon, Zap, Wifi, WifiOff, Sparkles, Command } from "lucide-react";
+import { motion } from "framer-motion";
 import { useStore } from "@/store/assistantStore";
 import { PROVIDERS } from "@/lib/constants";
 import { AccentPicker } from "./AccentPicker";
@@ -33,17 +34,17 @@ export function TopBar() {
   if (isListening) { label = "LISTENING"; dot = "#ef4444"; }
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 md:px-6">
+    <div className="flex items-center justify-between gap-3 px-4 py-3 md:px-6 border-b border-white/[0.04] backdrop-blur-sm">
       <div className="flex items-center gap-2">
-        <div className="glass-card flex items-center gap-2 rounded-full px-3 py-1.5 text-xs">
+        <motion.div animate={{ scale: isListening || isSpeaking || isAiThinking ? [1, 1.06, 1] : 1 }} transition={{ duration: 0.9, repeat: isListening || isSpeaking ? Infinity : 0 }} className="glass-card flex items-center gap-2 rounded-full px-3 py-1.5 text-xs border border-white/10">
           <span
-            className={cn("h-2 w-2 rounded-full", isListening && "animate-pulse")}
-            style={{ background: dot, boxShadow: `0 0 6px ${dot}` }}
+            className={cn("h-2 w-2 rounded-full", (isListening || isAiThinking || isSpeaking) && "animate-pulse")}
+            style={{ background: dot, boxShadow: `0 0 8px ${dot}` }}
           />
           <span className="font-mono text-white/70">
             <ScrambleText text={label} trigger={label} />
           </span>
-        </div>
+        </motion.div>
 
         <div className="glass-card hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs sm:flex">
           <Zap size={12} style={{ color: "var(--accent)" }} fill="var(--accent)" />
@@ -65,6 +66,9 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-2">
+        <button onClick={()=>useStore.getState().setCommandPaletteOpen(true)} title="Command Palette (Ctrl+K)" className="hidden sm:flex items-center gap-1.5 rounded-full glass-card px-3 py-1.5 text-xs text-white/60 hover:text-white border border-white/10">
+          <Command size={13} /> Ctrl+K
+        </button>
         <AccentPicker />
         <button
           onClick={() => {

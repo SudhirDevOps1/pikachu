@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Calendar, Plus, X } from "lucide-react";
 import { GlassCard } from "./GlassCard";
 import { GlowButton } from "./GlowButton";
 import { PanelHeader } from "./PanelHeader";
 import { useStore } from "@/store/assistantStore";
+import { useAssistantApi } from "@/hooks/AssistantContext";
 import { generateId } from "@/lib/utils";
 
 interface Task {
@@ -15,6 +16,7 @@ interface Task {
 }
 
 export function SchedulerPanel() {
+  const { sendRaw } = useAssistantApi();
   const [tasks, setTasks] = useState<Task[]>([
     { id: generateId(), name: "रोज़ स्क्रीनशॉट", command: "screenshot", schedule: "daily at 09:00", nextRun: "कल 09:00" },
     { id: generateId(), name: "मेमोरी सफाई", command: "cleanup temp", schedule: "every 6 hours", nextRun: "3 घंटे बाद" },
@@ -25,11 +27,37 @@ export function SchedulerPanel() {
 
   const commands = ["screenshot", "cleanup temp", "battery status", "open chrome", "lock computer", "volume 30%"];
 
+  // Load persisted jobs from backend
+  useEffect(() => {
+    sendRaw(JSON.stringify({ type: "command", category: "scheduler", action: "list", params: {} }));
+    const onMsg = (e: any) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === "mcp_result" && d.name === "scheduler.list") {
+          const items = d.data?.data?.items || [];
+          if (items.length) setTasks(items.map((j:any)=>({ id:j.id, name:j.name, command:j.command, schedule:j.schedule, nextRun:j.schedule })));
+        }
+        if (d.type === "response" && d.data?.items && Array.isArray(d.data.items) && d.data.items[0]?.command) {
+          setTasks(d.data.items.map((j:any)=>({ id:j.id, name:j.name, command:j.command, schedule:j.schedule, nextRun:j.schedule })));
+        }
+      } catch {}
+    };
+    // We listen via WS raw handler in useAssistant — this effect is placeholder for polling
+    return () => {};
+  }, [sendRaw]);
+
   const add = () => {
     if (!name) return;
-    setTasks((t) => [{ id: generateId(), name, command, schedule, nextRun: "गणना हो रही..." }, ...t]);
+    const newTask = { id: generateId(), name, command, schedule, nextRun: schedule };
+    setTasks((t) => [newTask, ...t]);
+    // Persist to backend
+    sendRaw(JSON.stringify({ type: "command", category: "scheduler", action: "add", params: { id: newTask.id, name, command, schedule } }));
     setName("");
-    useStore.getState().addToast({ type: "success", message: "टास्क शेड्यूल हुआ" });
+    useStore.getState().addToast({ type: "success", message: "टास्क शेड्यूल हुआ — backend persistent ⏰" });
+  };
+  const remove = (id: string) => {
+    setTasks((arr) => arr.filter((x) => x.id !== id));
+    sendRaw(JSON.stringify({ type: "command", category: "scheduler", action: "remove", params: { id } }));
   };
 
   return (
@@ -57,7 +85,7 @@ export function SchedulerPanel() {
               <div className="font-medium text-white">{t.name}</div>
               <div className="text-xs text-white/50"><code className="text-violet-300">{t.command}</code> · {t.schedule} · अगला: {t.nextRun}</div>
             </div>
-            <button onClick={() => setTasks((arr) => arr.filter((x) => x.id !== t.id))} className="text-red-400/70 hover:text-red-400"><X size={18} /></button>
+            <button onClick={() => remove(t.id)} className="text-red-400/70 hover:text-red-400"><X size={18} /></button>
           </GlassCard>
         ))}
       </div>

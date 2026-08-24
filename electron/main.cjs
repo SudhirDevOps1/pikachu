@@ -154,13 +154,15 @@ function createTray() {
       { type: "separator" },
       { label: "Show / Hide Window", click: () => toggleWindow() },
       { label: "Mini Mode (Always on Top)", type: "checkbox", checked: isMiniMode, click: () => toggleMiniMode() },
+      { label: "Dispatch: Scheduled Jobs", click: () => { if (mainWindow) { mainWindow.show(); mainWindow.webContents.send("nav:scheduler"); } } },
+      { label: "Connectors: Gmail/Calendar", click: () => { if (mainWindow) { mainWindow.show(); mainWindow.webContents.send("nav:connectors"); } } },
       { type: "separator" },
       { label: "Restart PC Bridge", click: () => { stopPythonBridge(); setTimeout(startPythonBridge, 600); } },
       { label: "Open Logs Folder", click: () => shell.openPath(ROOT) },
       { type: "separator" },
       { label: "Quit Pika", click: () => { isQuitting = true; app.quit(); } },
     ]);
-    tray.setToolTip("Pika AI Assistant");
+    tray.setToolTip("Pika AI Assistant — tray: dispatch + connectors added");
     tray.setContextMenu(menu);
     tray.on("double-click", () => toggleWindow());
   } catch (err) {
@@ -268,8 +270,25 @@ function registerIpcHandlers() {
     isDesktop: true,
   }));
 
-  ipcMain.handle("shell:open-external", (_e, url) => shell.openExternal(url));
-  ipcMain.handle("shell:open-path", (_e, p) => shell.openPath(p));
+  ipcMain.handle("shell:open-external", (_e, url) => {
+    try {
+      const u = new URL(url);
+      if (!["http:", "https:", "mailto:"].includes(u.protocol)) {
+        console.warn("[pika] blocked open-external non-http:", url.slice(0,80));
+        return Promise.resolve({ error: "blocked: only http/https/mailto allowed" });
+      }
+      return shell.openExternal(url);
+    } catch { return Promise.resolve({ error: "invalid url" }); }
+  });
+  ipcMain.handle("shell:open-path", (_e, p) => {
+    // Allow only under HOME or ROOT, block Windows/System32
+    try {
+      const path = require("path");
+      const rp = path.resolve(String(p));
+      if (/Windows\\System32/i.test(rp) || /^\w:\\Windows/i.test(rp)) return Promise.resolve({ error: "blocked" });
+      return shell.openPath(p);
+    } catch { return shell.openPath(p); }
+  });
 
   ipcMain.handle("dialog:pick-file", async () => {
     const res = await dialog.showOpenDialog(mainWindow, { properties: ["openFile"] });
@@ -288,13 +307,31 @@ app.whenReady().then(() => {
   createTray();
   startPythonBridge();
 
-  // Global hotkey: kahin se bhi Pika ko bulao
+  // Global hotkeys: kahin se bhi Pika ko bulao + always-on dispatch
   globalShortcut.register("CommandOrControl+Shift+Space", () => {
     if (!mainWindow) return;
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.send("hotkey:voice-toggle");
   });
+  // Extra: Ctrl+Shift+Alt+P = pause, Ctrl+Shift+Alt+S = stop (Thio-style interrupt)
+  try {
+    globalShortcut.register("CommandOrControl+Shift+Alt+P", () => {
+      if (mainWindow) mainWindow.webContents.send("hotkey:pause");
+    });
+    globalShortcut.register("CommandOrControl+Shift+Alt+S", () => {
+      if (mainWindow) mainWindow.webContents.send("hotkey:stop");
+    });
+    globalShortcut.register("CommandOrControl+Shift+D", () => {
+      if (mainWindow) mainWindow.webContents.send("hotkey:dispatch");
+    });
+  } catch (e) { console.warn("[pika] extra hotkey failed", e.message); }
+  // Keep app awake for dispatch (prevent sleep during scheduled jobs)
+  try {
+    const { powerSaveBlocker } = require("electron");
+    const blockerId = powerSaveBlocker.start("prevent-app-suspension");
+    console.log("[pika] powerSaveBlocker", blockerId, powerSaveBlocker.isStarted(blockerId));
+  } catch (e) { console.warn("[pika] powerSaveBlocker failed", e.message); }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

@@ -50,11 +50,20 @@ function renderInline(text: string): React.ReactNode[] {
       nodes.push(<em key={key++}>{tok.slice(1, -1)}</em>);
     } else if (tok.startsWith("[")) {
       const lm = tok.match(/\[([^\]]+)\]\(([^)]+)\)/);
-      if (lm) nodes.push(
-        <a key={key++} href={lm[2]} target="_blank" rel="noopener noreferrer" className="text-cyan-400 underline hover:text-cyan-300">
-          {lm[1]}
-        </a>
-      );
+      if (lm) {
+        const href = lm[2].trim();
+        const safe = /^https?:\/\//i.test(href) || /^mailto:/i.test(href) || href.startsWith("/") || href.startsWith("#");
+        if (safe) {
+          nodes.push(
+            <a key={key++} href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-400 underline hover:text-cyan-300">
+              {lm[1]}
+            </a>
+          );
+        } else {
+          // javascript:, data:, file: etc — render as plain text, not link
+          nodes.push(<Fragment key={key++}>{lm[1]} <span className="text-white/30 text-xs">({href.slice(0,30)})</span></Fragment>);
+        }
+      }
     }
     last = m.index + tok.length;
   }

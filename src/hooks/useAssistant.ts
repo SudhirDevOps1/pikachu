@@ -28,6 +28,7 @@ export function useAssistant() {
   const streamId = useRef<string | null>(null);
   const lastSpokenRef = useRef<{ text: string; time: number }>({ text: "", time: 0 });
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsQueueRef = useRef<string[]>([]);
 
   const store = useStore;
 
@@ -60,8 +61,27 @@ export function useAssistant() {
       if (match) u.voice = match;
 
       store.getState().setSpeaking(true);
-      u.onend = () => store.getState().setSpeaking(false);
-      u.onerror = () => store.getState().setSpeaking(false);
+      u.onend = () => {
+        const q: string[] = ttsQueueRef.current;
+        if (q.length > 0) {
+          const next = q.shift()!;
+          ttsQueueRef.current = q;
+          window.setTimeout(() => speakWithBrowser(next), 120);
+        } else {
+          store.getState().setSpeaking(false);
+          ttsQueueRef.current = [];
+        }
+      };
+      u.onerror = () => {
+        const q: string[] = ttsQueueRef.current;
+        if (q.length > 0) {
+          const next = q.shift()!;
+          ttsQueueRef.current = q;
+          speakWithBrowser(next);
+        } else {
+          store.getState().setSpeaking(false);
+        }
+      };
       window.speechSynthesis.speak(u);
     } catch {
       store.getState().setSpeaking(false);
@@ -200,6 +220,28 @@ export function useAssistant() {
       if (result.parsed.category === "config" && result.parsed.action === "switch_provider") {
         store.getState().updateSettings({ aiProvider: String(result.parsed.params.provider) });
       }
+      // UI voice control — bina backend ke local
+      if (result.parsed.category === "ui") {
+        const a = result.parsed.action;
+        const p = result.parsed.params as any;
+        if (a === "switch_mode" && (p.mode === "futurist" || p.mode === "standard")) {
+          store.getState().setUiMode(p.mode);
+          if (p.mode === "futurist") store.getState().addToast({ type: "success", message: "🌌 Futurist Mode ON" });
+        } else if (a === "clear_chat") {
+          store.getState().clearMessages();
+        } else if (a === "open_tab" && p.tab) {
+          store.getState().setActiveTab(p.tab);
+          store.getState().setUiMode("standard");
+        } else if (a === "toggle_theme") {
+          const cur = store.getState().settings.theme;
+          const nxt = cur === "dark" ? "light" : "dark";
+          store.getState().updateSettings({ theme: nxt });
+          document.documentElement.classList.toggle("theme-light", nxt === "light");
+        }
+        sounds.success();
+        if (result.reply) triggerTTS(result.reply);
+        return;
+      }
       sounds.success();
 
       // Send to backend if connected
@@ -310,8 +352,21 @@ export function useAssistant() {
             const engines = (msg.data as any).engines;
             store.getState().setEngines(engines.stt, engines.tts, engines.llm);
           }
+          // Persist WS token for LAN auth (additive, not enforcing yet)
+          if (msg.data && typeof msg.data === "object" && "ws_token" in msg.data) {
+            try { localStorage.setItem("pika_ws_token", (msg.data as any).ws_token); } catch {}
+            // Auto-auth
+            if (ws.current?.readyState === WebSocket.OPEN) {
+              ws.current.send(JSON.stringify({ type: "auth", token: (msg.data as any).ws_token }));
+            }
+          }
           if (ws.current?.readyState === WebSocket.OPEN) {
             ws.current.send(JSON.stringify({ type: "load_data" }));
+            // If we already had a stored token, send it too
+            try {
+              const stored = localStorage.getItem("pika_ws_token");
+              if (stored) ws.current.send(JSON.stringify({ type: "auth", token: stored }));
+            } catch {}
           }
           break;
         case "system_status":
@@ -380,12 +435,33 @@ export function useAssistant() {
             currentAudioRef.current = audio;
             store.getState().setSpeaking(true);
             audio.onended = () => {
-              store.getState().setSpeaking(false);
               currentAudioRef.current = null;
+              const q: string[] = ttsQueueRef.current;
+              if (q.length > 0) {
+                const next = q.shift()!;
+                ttsQueueRef.current = q;
+                // Slight gap between sentences
+                window.setTimeout(() => triggerTTS(next), 180);
+              } else {
+                store.getState().setSpeaking(false);
+                ttsQueueRef.current = [];
+              }
+            };
+            audio.onpause = () => {
+              // If paused for next queue, don't mark not speaking yet
+              const q: string[] = ttsQueueRef.current;
+              if (q.length === 0) store.getState().setSpeaking(false);
             };
             audio.play().catch((err) => {
               console.warn("Audio play rejected:", err);
-              store.getState().setSpeaking(false);
+              const q: string[] = ttsQueueRef.current;
+              if (q.length > 0) {
+                const next = q.shift()!;
+                ttsQueueRef.current = q;
+                triggerTTS(next);
+              } else {
+                store.getState().setSpeaking(false);
+              }
             });
           } catch {
             store.getState().setSpeaking(false);
@@ -436,14 +512,31 @@ export function useAssistant() {
         // FIX: content already includes chunk after append, don't add chunk again (was causing duplicated tail)
         const fullText = msgObj?.content || "";
         if (fullText.trim()) {
-          // Clean markdown, limit to first 300 chars so TTS doesn't read entire long response
-          const cleanText = fullText
+          // Sentence-aware chunking: split into sentences, queue via backend tts_audio (no 300-char cut for long answers)
+          const normalized = fullText
             .replace(/[*#`_~>\[\]]/g, "")
             .replace(/https?:\/\/\S+/g, "")
             .replace(/\n+/g, " ")
-            .trim()
-            .slice(0, 300);
-          if (cleanText) triggerTTS(cleanText, curId);
+            .trim();
+          // Split on sentence boundaries (Hindi danda । + . ! ?) keep delimiters, fallback to 300-char slices
+          const sentences = normalized.match(/[^।.!?]+[।.!?]+|[^।.!?]+$/g) || [normalized];
+          const chunks: string[] = [];
+          let buf = "";
+          for (const s of sentences) {
+            const cand = (buf ? buf + " " : "") + s.trim();
+            if (cand.length > 320 && buf) {
+              chunks.push(buf.trim());
+              buf = s.trim();
+            } else {
+              buf = cand;
+            }
+          }
+          if (buf) chunks.push(buf.trim());
+          // Send chunks sequentially via tts_queue to avoid overlap; first chunk immediate, rest via tts_audio onended chain
+          if (chunks.length > 0) {
+            // Store queue in ref so tts_audio onended can continue
+            ttsQueueRef.current = chunks.slice(1);            triggerTTS(chunks[0], curId);
+          }
         }
         streamId.current = null;
       } else {
@@ -485,7 +578,32 @@ export function useAssistant() {
       console.log("[WS] already connected/connecting, skip duplicate connect");
       return;
     }
-    const url = store.getState().settings.bridgeUrl;
+    // Auto-connect via link: ?bridge=wss://...&token=xxx overrides bridgeUrl for this session (no delete, additive)
+    let url = store.getState().settings.bridgeUrl;
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const qBridge = sp.get("bridge");
+      const qToken = sp.get("token");
+      if (qBridge && /^wss?:\/\/.+/i.test(qBridge)) {
+        url = qBridge;
+        // Persist for reload
+        try { localStorage.setItem("pika_cf_tunnel_url", qBridge); } catch {}
+        if (qToken) { try { localStorage.setItem("pika_ws_token", qToken); } catch {} }
+        console.log("[WS] auto-connect via link bridge:", url);
+        // Clean URL (keep shareable link copy in settings)
+        try { window.history.replaceState({}, "", window.location.pathname); } catch {}
+      } else {
+        // Also check localStorage tunnel url if set and not localhost
+        const savedTunnel = localStorage.getItem("pika_cf_tunnel_url");
+        if (savedTunnel && /^wss?:\/\/.+/i.test(savedTunnel) && !url.includes("trycloudflare") && !url.includes("tailnet")) {
+          // Don't auto-override localhost if user explicitly wants LAN — only if bridge is default localhost
+          if (url === "ws://localhost:8765" || url.includes("localhost")) {
+            // keep localhost by default for LAN, tunnel only via ?bridge= link (explicit)
+          }
+        }
+      }
+    } catch {}
+    if (!url) url = "ws://localhost:8765";
     store.getState().setConnection("connecting");
     try {
       const socket = new WebSocket(url);
@@ -556,7 +674,10 @@ export function useAssistant() {
         state.settings !== prevState.settings ||
         state.messages !== prevState.messages ||
         state.tokenUsage !== prevState.tokenUsage ||
-        state.reminders !== prevState.reminders
+        state.reminders !== prevState.reminders ||
+        state.uiMode !== prevState.uiMode ||
+        state.activeTab !== prevState.activeTab ||
+        state.sidebarExpanded !== prevState.sidebarExpanded
       ) {
         if (ws.current?.readyState === WebSocket.OPEN) {
           ws.current.send(
@@ -569,9 +690,19 @@ export function useAssistant() {
                 reminders: state.reminders,
                 clipboardHistory: state.clipboardHistory,
                 commandsExecuted: state.commandsExecuted,
+                uiMode: state.uiMode,
+                activeTab: state.activeTab,
+                sidebarExpanded: state.sidebarExpanded,
               },
             })
           );
+        } else {
+          // Also persist locally for instant reload without vault
+          try {
+            localStorage.setItem("pika_uiMode", state.uiMode);
+            localStorage.setItem("pika_activeTab", state.activeTab);
+            localStorage.setItem("pika_sidebarExpanded", String(state.sidebarExpanded));
+          } catch {}
         }
       }
     });

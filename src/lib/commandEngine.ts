@@ -207,6 +207,20 @@ const RULES: Rule[] = [
   // ══════ DISK CLEANUP ══════
   { re: /(?:clean.?up|clean)\s*(?:temp|junk|garbage)?/i, handle: () => cmd("disk","cleanup_temp",{},"⚠️ Cleanup confirm…") },
 
+  // ══════ UI MODE & NAVIGATION VOICE (STANDARD ↔ FUTURIST) ══════
+  { re: /(?:futurist|future|futuristic|future\s*mode)\s*(?:mode|on|kholo|chalu|enable)/i, handle: () => cmd("ui","switch_mode",{mode:"futurist"},`🚀 Futurist Mode ON`,{toast:{type:"success",message:"Futurist Mode 🌌"}}) },
+  { re: /(?:standard|normal|classic|simple)\s*(?:mode|on|kholo|chalu)/i, handle: () => cmd("ui","switch_mode",{mode:"standard"},`🎨 Standard Mode ON`,{toast:{type:"success",message:"Standard Mode"}}) },
+  { re: /(?:clear|saaf|khali|delete)\s*(?:chat|conversation|history|messages?)/i, handle: () => cmd("ui","clear_chat",{},"🧹 Chat saaf kar diya",{toast:{type:"success",message:"Chat cleared"}}) },
+  { re: /(?:show|kholo|open)\s*(?:settings|setting)\s*(?:panel)?/i, handle: () => cmd("ui","open_tab",{tab:"settings"},`⚙️ Settings khol raha hoon`) },
+  { re: /(?:show|kholo|open)\s*(?:controls?|control\s*panel)/i, handle: () => cmd("ui","open_tab",{tab:"controls"},`🎮 Controls`) },
+  { re: /(?:show|kholo|open)\s*(?:tools?|tool\s*panel)/i, handle: () => cmd("ui","open_tab",{tab:"tools"},`🛠️ Tools`) },
+  { re: /(?:show|kholo|open)\s*(?:macros?|macro)/i, handle: () => cmd("ui","open_tab",{tab:"macros"},`🔁 Macros`) },
+  { re: /(?:show|kholo|open)\s*(?:reminders?|reminder)/i, handle: () => cmd("ui","open_tab",{tab:"reminders"},`⏰ Reminders`) },
+  { re: /(?:show|kholo|open)\s*(?:processes?|process|task\s*manager)/i, handle: () => cmd("ui","open_tab",{tab:"processes"},`⚙️ Processes`) },
+  { re: /(?:show|kholo|open)\s*(?:scheduler|schedule)/i, handle: () => cmd("ui","open_tab",{tab:"scheduler"},`📅 Scheduler`) },
+  { re: /(?:show|kholo|open)\s*(?:chat|home)/i, handle: () => cmd("ui","open_tab",{tab:"chat"},`💬 Chat`) },
+  { re: /(?:toggle|switch)\s*(?:theme|dark|light)/i, handle: () => cmd("ui","toggle_theme",{},"🎨 Theme toggled") },
+
   // ══════ AI PROVIDER ══════
   { re: /(?:switch|badlo|use)\s*(?:to)?\s*(groq|gemini|mistral|cerebras|openrouter|zai|deepseek)/i, handle: (m) => cmd("config","switch_provider",{provider:m[1].toLowerCase()},`🔄 Provider: ${m[1]}`,{toast:{type:"success",message:`Provider: ${m[1]}`}}) },
   // ══════ OBSIDIAN VAULT COMMANDS ══════
@@ -219,6 +233,60 @@ const RULES: Rule[] = [
   // ══════ MULTIMODAL SCREEN VISION ══════
   { re: /(?:screen\s*(?:par\s*kya\s*hai|dekho|samjhao|analyze)|kya\s*(?:chal|dikha)\s*raha\s*hai|is\s*(?:error|page|screen|photo)\s*(?:ko)?\s*(?:samjhao|explain|read|dekho))/i, handle: (m) => cmd("vision","analyze",{query:m[0]},"👁️ स्क्रीन देख रहा हूँ...",{toast:{type:"info",message:"Screen Vision 👁️"}}) },
   { re: /(?:what\s*is|explain|analyze|describe)\s*(?:on\s*my)?\s*screen/i, handle: (m) => cmd("vision","analyze",{query:m[0]},"👁️ Analyzing screen...",{toast:{type:"info",message:"Screen Vision 👁️"}}) },
+
+  // ══════ BLUETOOTH / WIFI / NETWORK HARDWARE — real toggle (open only fallback) ══════
+  { re: /(?:bluetooth|blututh)(?:\s+(on|off|chalu|band|enable|disable|kholo|toggle))?/i, handle: (m) => {
+      const t = m[0].toLowerCase();
+      const on = /(on|chalu|enable)/.test(t);
+      const off = /(off|band|disable)/.test(t);
+      const action = on ? "on" : off ? "off" : "toggle";
+      return cmd("system","bluetooth",{action, toggle: action},`📶 Bluetooth ${action} — toggle kar raha hoon`,{toast:{type:"success",message:`Bluetooth ${action}`}});
+    }},
+  { re: /(?:wifi|wi-fi|wify)(?:\s+(on|off|chalu|band|enable|disable|kholo|toggle|connect))?/i, handle: (m) => {
+      const t = m[0].toLowerCase();
+      const on = /(on|chalu|enable|connect)/.test(t);
+      const off = /(off|band|disable)/.test(t);
+      const action = on ? "on" : off ? "off" : "toggle";
+      return cmd("system","wifi",{action},`📶 WiFi ${action} — toggle`,{toast:{type:"success",message:`WiFi ${action}`}});
+    }},
+  { re: /(?:airplane|flight)\s*mode\s*(?:on|off|kholo|band|toggle)?/i, handle: (m) => {
+      const t = m[0].toLowerCase();
+      const on = /on/.test(t); const off = /off|band/.test(t);
+      const action = on ? "on" : off ? "off" : "toggle";
+      return cmd("system","airplane",{action},`✈️ Airplane ${action}`,{toast:{type:"info",message:`Airplane ${action}`}});
+    }},
+  { re: /(?:display|screen)\s*(?:settings|kholo|resolution|scale)/i, handle: () => cmd("apps","open",{name:"display"},`🖥️ Display Settings`,{toast:{type:"success",message:"Display"}}) },
+  { re: /(?:sound|audio|speaker)\s*(?:settings|kholo|mixer)/i, handle: () => cmd("apps","open",{name:"sound"},`🔊 Sound Settings`,{toast:{type:"success",message:"Sound"}}) },
+  { re: /(?:settings|seting)\s*(?:kholo|open)/i, handle: () => cmd("apps","open",{name:"settings"},`⚙️ Settings खोल रहा हूँ`,{toast:{type:"success",message:"Settings"}}) },
+  { re: /(?:control panel|control pannel)\s*(?:kholo|open)?/i, handle: () => cmd("apps","open",{name:"control panel"},`🎛️ Control Panel`,{toast:{type:"success",message:"Control Panel"}}) },
+  { re: /(?:dark mode|night light|theme)\s*(?:on|off|kholo|lagao)/i, handle: () => cmd("apps","open",{name:"display"},`🌙 Display — Night Light`,{toast:{type:"info",message:"Night Light"}}) },
+
+  // ══════ FULL FILE VOICE CONTROL ══════
+  { re: /(?:create|banao|naya)\s+(?:file\s+)?(.+?\.(?:txt|md|json|py|js|html|cpp))\s*(?:mein|me)?\s*(.+)?/i, handle: (m) => cmd("files","create_file",{path:m[1].trim(), content:m[2]||""},`📄 File बना रहा हूँ: ${m[1].trim()}`,{toast:{type:"success",message:"File Created"}}) },
+  { re: /(?:create|banao)\s+(?:folder|directory)\s+(.+)/i, handle: (m) => cmd("files","create_folder",{path:m[1].trim()},`📁 Folder बना रहा हूँ: ${m[1].trim()}`,{toast:{type:"success",message:"Folder Created"}}) },
+  { re: /(?:read|padho|kholo|dikhao)\s+(?:file\s+)?(.+?\.(?:txt|md|json|py|js|html|log))/i, handle: (m) => cmd("files","read",{path:m[1].trim()},`📖 पढ़ रहा हूँ: ${m[1].trim()}`) },
+  { re: /(?:delete|hatao|remove)\s+(?:file\s+)?(.+?\.(?:txt|md|json|py|js|html))/i, handle: (m) => cmd("files","delete",{path:m[1].trim()},`⚠️ Delete confirm: ${m[1].trim()}`) },
+  { re: /(?:search|khojo|dhundo)\s+(?:files?|folder)\s+(.+)/i, handle: (m) => cmd("files","list",{path:m[1].trim()},`🔍 Searching files: ${m[1].trim()}`) },
+  { re: /(?:rename|naam badlo)\s+(.+?)\s+(?:to|se)\s+(.+)/i, handle: (m) => cmd("files","rename",{path:m[1].trim(), new_path:m[2].trim()},`✏️ Rename: ${m[1].trim()} → ${m[2].trim()}`) },
+
+  // ══════ NOTEPAD / EDITOR / TASK MANAGER DIRECT ══════
+  { re: /(?:notepad|editor)\s*(?:kholo|open|launch)?/i, handle: () => cmd("apps","open",{name:"notepad"},`📝 Notepad खोल रहा हूँ`,{toast:{type:"success",message:"Notepad"}}) },
+  { re: /(?:paint|mspaint)\s*(?:kholo|open)?/i, handle: () => cmd("apps","open",{name:"paint"},`🎨 Paint खोल रहा हूँ`) },
+  { re: /(?:calculator|calc)\s*(?:kholo|open)?/i, handle: () => cmd("apps","open",{name:"calc"},`🧮 Calculator`) },
+  { re: /(?:task manager|taskmgr)\s*(?:kholo|open)?/i, handle: () => cmd("apps","open",{name:"task manager"},`⚙️ Task Manager`) },
+  { re: /(?:file explorer|explorer)\s*(?:kholo|open)?/i, handle: () => cmd("apps","open",{name:"explorer"},`📂 Explorer`) },
+  { re: /(?:terminal|cmd|powershell)\s*(?:kholo|open)?/i, handle: (m) => cmd("apps","open",{name:m[0].toLowerCase().includes("powershell")?"powershell":m[0].toLowerCase().includes("cmd")?"cmd":"terminal"},`💻 Terminal`) },
+
+  // ══════ UIA / BROWSER / CONNECTORS VOICE ══════
+  { re: /(?:click|tap)\s*(?:on\s+)?(.+)?/i, handle: (m) => cmd("uia","click",{name:m[1]?.trim()||"", text:m[1]?.trim()||""},`🖱️ Click: ${m[1]?.trim()||"center"}`) },
+  { re: /(?:scroll|niche|upar)\s*(?:karo|kar)?\s*(up|down)?/i, handle: (m) => cmd("uia","scroll",{direction:m[1]||"down"},`↕️ Scroll ${m[1]||"down"}`) },
+  { re: /(?:browser|chrome|edge)\s*(?:mein|me)?\s*(.+?)\s*(?:kholo|open|jao)/i, handle: (m) => cmd("browser","open",{url:m[1].trim()},`🌐 Browser: ${m[1].trim()}`) },
+  { re: /(?:connect|jodo)\s+(gmail|calendar|slack|notion|github|drive)/i, handle: (m) => cmd("connectors","connect",{id:m[1].toLowerCase()},`🔌 Connecting ${m[1]}`) },
+  { re: /(?:disconnect|hatao)\s+(gmail|calendar|slack|notion|github|drive)/i, handle: (m) => cmd("connectors","disconnect",{id:m[1].toLowerCase()},`🔌 Disconnected ${m[1]}`) },
+
+  // ══════ SCHEDULER VOICE ══════
+  { re: /(?:schedule|shuru karo)\s+(.+?)\s+(?:har|every)\s*(.+)/i, handle: (m) => cmd("scheduler","add",{name:m[1].trim(), command:m[1].trim(), schedule:`every ${m[2].trim()}`},`⏰ Schedule: ${m[1].trim()} every ${m[2].trim()}`) },
+  { re: /(?:scheduled|shudule)\s*(?:tasks?|jobs?)?\s*(?:dikhao|list|kya hai)/i, handle: () => cmd("scheduler","list",{},`⏰ Scheduled jobs dikha raha hoon`) },
 
   // ══════ LONG-TERM MEMORY VAULT ══════
   { re: /(?:yaad|yad)\s*(?:rakho|rakhna)\s*(?:ki|ye)?\s*(.+)/i, handle: (m) => cmd("memory","add",{fact:m[1].trim()},`🧠 याद रख रहा हूँ: ${m[1].trim()}`,{toast:{type:"success",message:"Memory Saved 🧠"}}) },
