@@ -1,64 +1,97 @@
-# Node.js dependencies & builds
+# =============================================================================
+# Pika AI Assistant — .gitignore
+# Generated: 2026-08-24 | Keep repo lean, reproducible & secret-free
+# =============================================================================
+
+# ── Node / Electron / Vite builds ────────────────────────────────────────────
 node_modules/
 dist/
 dist-electron/
+dist-bin/
 release/
 build/
+.pc_bridge_build/
 *.tsbuildinfo
+pc_bridge.spec
+*.blockmap
 
-# Python environment, caches & bytecode
+# ── Python env, caches & bytecode ────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+*.egg
+.venv/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
 
-# Environment variables & personal secrets
+# ── Secrets & local config (NEVER commit) ────────────────────────────────────
 .env
 .env.local
 .env.*.local
 *.local
 pika_data.json
+pika_audit.jsonl
+pc_bridge.log
+*.pem
+*.key
 
-# Vosk offline speech models & downloads (auto-downloaded at runtime)
+# ── Large models & downloads (use setup_models.py) ───────────────────────────
 models/
 *.zip
 *.tar.gz
+*.bin
+*.gguf
+!package.json
 
-# Logs & temp files
-*.log
-pc_bridge.log
+# ── Logs, media & temp ───────────────────────────────────────────────────────
 logs/
 temp/
 tmp/
+.screenshots/
+screenshots/
 *.tmp
+*.log
 *.mp3
 *.wav
+*.bak
 
-# Scratch & patch scripts
-fix*.py
-patch*.py
-kill*.py
-test_*.py
-test*.py
+# ── Scratch / patch / experiment scripts (not part of product) ───────────────
+fix_*.py
+fix.py
+fix2.py
+fix_banner*.py
+fix_handle.py
+patch.py
+kill_*.py
 write_engine.py
 recovery*.txt
-*.bak
-*.txt
-!requirements.txt
+showcase.html
 
-# Local temporary notes & test files
+# Keep canonical test suite — do NOT ignore
+!test_pc_bridge.py
+
+# ── Lightweight throwaway tests (ignore, keep repo clean) ────────────────────
+test_bridge.py
+test_conn.py
+test_ws.py
+test_hf.py
+test_*.bak
+
+# ── Local notes (personal, not for repo) ─────────────────────────────────────
 brain.md
 details.md
-showcase.html
-screenshots/
 
-# IDE & OS specific files
+# ── IDE & OS junk ────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.suo
@@ -68,4 +101,5 @@ screenshots/
 *.sw?
 .DS_Store
 Thumbs.db
-
+ehthumbs.db
+Desktop.ini

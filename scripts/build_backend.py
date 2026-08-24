@@ -13,6 +13,16 @@ BRIDGE = ROOT / "pc_bridge.py"
 DIST_DIR = ROOT / "dist-bin"
 MODELS_DIR = ROOT / "models"
 
+def _existing_imports(mods):
+    """Sirf installed modules return karta hai — missing hidden-imports build fail nahi karenge."""
+    import importlib.util
+    ok, skipped = [], []
+    for m in mods:
+        (ok if importlib.util.find_spec(m) else skipped).append(m)
+    if skipped:
+        print(f"[skip] Not installed (optional): {', '.join(skipped)}")
+    return ok
+
 def build():
     print("=" * 60)
     print("  Pika AI — Building Backend Executable")
@@ -22,75 +32,50 @@ def build():
         print(f"ERROR: {BRIDGE} not found!")
         sys.exit(1)
     
-    # PyInstaller command
+    hidden = _existing_imports([
+        "websockets", "websockets.legacy", "websockets.exceptions",
+        "pyautogui", "pygetwindow", "pyperclip", "psutil",
+        "PIL", "PIL.ImageGrab", "cv2", "pytesseract", "requests",
+        "aiohttp", "aiohttp.client", "edge_tts", "vosk",
+        "cryptography", "cryptography.fernet",
+        "json", "re", "time", "datetime", "pathlib", "platform",
+        "math", "base64", "hashlib", "uuid", "statistics", "decimal",
+        "fractions", "copy", "pprint", "itertools", "collections",
+        "functools", "string", "tiktoken",
+        # Windows-specific
+        "winreg", "ctypes", "ctypes.wintypes",
+        "win32api", "win32con", "win32gui", "win32process",
+        "numpy", "mss",
+    ])
+    
+    # PyInstaller command — workpath ko Temp me rakho (path me space + antivirus lock se bachne)
+    import tempfile
+    work_dir = Path(tempfile.gettempdir()) / "pika_pyinstaller_build"
+    work_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile",
         "--name", "pc_bridge",
         "--distpath", str(DIST_DIR),
-        "--workpath", str(ROOT / "build"),
+        "--workpath", str(work_dir),
         "--specpath", str(ROOT),
         "--noconfirm",
-        "--clean",
-        # Hidden imports for all dependencies
-        "--hidden-import", "websockets",
-        "--hidden-import", "websockets.legacy",
-        "--hidden-import", "websockets.exceptions",
-        "--hidden-import", "pyautogui",
-        "--hidden-import", "pygetwindow",
-        "--hidden-import", "pyperclip",
-        "--hidden-import", "psutil",
-        "--hidden-import", "PIL",
-        "--hidden-import", "PIL.ImageGrab",
-        "--hidden-import", "cv2",
-        "--hidden-import", "pytesseract",
-        "--hidden-import", "requests",
-        "--hidden-import", "aiohttp",
-        "--hidden-import", "aiohttp.client",
-        "--hidden-import", "edge_tts",
-        "--hidden-import", "vosk",
-        "--hidden-import", "apscheduler",
-        "--hidden-import", "cryptography",
-        "--hidden-import", "cryptography.fernet",
-        "--hidden-import", "json",
-        "--hidden-import", "re",
-        "--hidden-import", "time",
-        "--hidden-import", "datetime",
-        "--hidden-import", "pathlib",
-        "--hidden-import", "platform",
-        "--hidden-import", "math",
-        "--hidden-import", "base64",
-        "--hidden-import", "hashlib",
-        "--hidden-import", "uuid",
-        "--hidden-import", "statistics",
-        "--hidden-import", "decimal",
-        "--hidden-import", "fractions",
-        "--hidden-import", "copy",
-        "--hidden-import", "pprint",
-        "--hidden-import", "itertools",
-        "--hidden-import", "collections",
-        "--hidden-import", "functools",
-        "--hidden-import", "string",
-        "--hidden-import", "tiktoken",
-        # Windows-specific
-        "--hidden-import", "winreg",
-        "--hidden-import", "ctypes",
-        "--hidden-import", "ctypes.wintypes",
-        "--hidden-import", "win32api",
-        "--hidden-import", "win32con",
-        "--hidden-import", "win32gui",
-        "--hidden-import", "win32process",
-        "--hidden-import", "win32security",
-        "--hidden-import", "pywin32",
-        # Screen recording
-        "--hidden-import", "numpy",
-        # Collect data files
-        "--add-data", f"{ROOT / 'requirements.txt'};.",
     ]
+    # Exclude conflicting Qt bindings, heavy unused ML/GUI packages to keep binary fast and lean
+    excludes = [
+        "PyQt5", "PyQt6", "PySide2", "PySide6",
+        "matplotlib", "notebook", "IPython", "jupyter",
+        "tkinter", "PIL.TkImage",
+        "torch", "torchvision", "torchaudio", "tensorflow", "tensorboard", "keras",
+        "scipy", "sympy", "sklearn", "transformers", "pandas"
+    ]
+    for exc in excludes:
+        cmd.extend(["--exclude-module", exc])
     
-    # Add models directory if exists
-    if MODELS_DIR.exists():
-        cmd.extend(["--add-data", f"{MODELS_DIR};models"])
+    for h in hidden:
+        cmd.extend(["--hidden-import", h])
+    # NOTE: models folder yahan bundle NAHI karte — wo electron-builder
+    # extraResources se <install>/resources/models me jaate hain.
     
     # Add the main script
     cmd.append(str(BRIDGE))

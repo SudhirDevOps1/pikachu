@@ -139,11 +139,38 @@ try:
 except Exception:
     pass
 
+# ─── Frozen-mode (PyInstaller) support ──────────────────────────────────────
+# Jab pc_bridge.exe (PyInstaller) ke roop me chalta hai:
+#   - __file__ temp extraction dir (_MEIPASS) me hota hai
+#   - sys.executable khud pc_bridge.exe hota hai (pip/subprocess me use nahi kar sakte)
+_FROZEN = getattr(sys, "frozen", False)
+if _FROZEN:
+    # exe: <install>/resources/bin/pc_bridge.exe → models: <install>/resources/models
+    _APP_ROOT = Path(sys.executable).resolve().parent.parent
+    # Writable data (logs/audit/screenshots) → ~/.pika/appdata (Program Files me write nahi kar sakte)
+    _DATA_ROOT = Path.home() / ".pika" / "appdata"
+    try:
+        _DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        _DATA_ROOT = Path.home()
+    def _host_python():
+        """Real system Python for subprocess/pip (frozen exe me sys.executable = khud exe)."""
+        for _c in ("python.exe", "py.exe"):
+            _w = shutil.which(_c)
+            if _w:
+                return _w
+        return "python"
+else:
+    _APP_ROOT = Path(__file__).parent
+    _DATA_ROOT = _APP_ROOT
+    def _host_python():
+        return sys.executable
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 HOST = "0.0.0.0"
 PORT = 8765
 SERVER_VERSION = "1.2.1"
-DATA_FILE = Path(__file__).parent / "pika_data.json"
+DATA_FILE = _DATA_ROOT / "pika_data.json"
 IS_WIN = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
 
@@ -244,7 +271,7 @@ def save_vault_data(payload: dict) -> bool:
 
 WAKE_WORDS = ["hey assistant", "hey pika", "पिका", "pika", "हे असिस्टेंट"]
 VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip"
-VOSK_MODEL_DIR = Path(__file__).parent / "models" / "hi"
+VOSK_MODEL_DIR = _APP_ROOT / "models" / "hi"
 DEFAULT_TTS_VOICE = "hi-IN-SwaraNeural"
 connected_clients: set = set()
 
@@ -269,9 +296,9 @@ def ensure_vosk_model():
     if not HAS_VOSK or Model is None:
         return
     model_paths = [
-        Path(__file__).parent / "models" / "hi",
-        Path(__file__).parent / "models" / "vosk",
-        Path(__file__).parent / "models" / "vosk-model-small-hi-0.22",
+        _APP_ROOT / "models" / "hi",
+        _APP_ROOT / "models" / "vosk",
+        _APP_ROOT / "models" / "vosk-model-small-hi-0.22",
     ]
     for mp in model_paths:
         if mp.exists() and ((mp / "am").exists() or (mp / "conf").exists()):
@@ -326,7 +353,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(Path(__file__).parent / "pc_bridge.log", encoding="utf-8"),
+        logging.FileHandler(_DATA_ROOT / "pc_bridge.log", encoding="utf-8"),
     ],
 )
 for h in logging.getLogger().handlers:
@@ -339,7 +366,7 @@ _INJECTION_PATTERNS = [r"ignore previous instructions", r"you are now dan", r"re
 def is_injection(text: str) -> bool:
     low = (text or "").lower()
     return any(re.search(p, low) for p in _INJECTION_PATTERNS)
-AUDIT_FILE = Path(__file__).parent / "pika_audit.jsonl"
+AUDIT_FILE = _DATA_ROOT / "pika_audit.jsonl"
 _RATE: dict = {}
 def check_rate(category: str, action: str, limit: int = 12, window: int = 60) -> bool:
     import time as _t
@@ -2416,7 +2443,7 @@ def _run_code_subprocess(code: str, timeout: int = 30) -> dict:
     try:
         # Run in isolated subprocess
         result = _sp.run(
-            [sys.executable, script_path],
+            [_host_python(), script_path],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -2558,7 +2585,7 @@ def cmd_code(action, params):
         if not pkg:
             return err("package name खाली है")
         try:
-            r = run([sys.executable, "-m", "pip", "install", pkg], timeout=60)
+            r = run([_host_python(), "-m", "pip", "install", pkg], timeout=60)
             return ok(f"pip install {pkg} ✅", {"stdout": (r.stdout or "")[:3000], "stderr": (r.stderr or "")[:2000], "returncode": r.returncode})
         except Exception as ex:
             return err(f"pip install failed: {ex}")
@@ -2681,7 +2708,7 @@ def cmd_screen(action, params):
                 # fallback to pyautogui
                 if not pyautogui:
                     return err("pyautogui ज़रूरी है")
-                shots = Path(__file__).parent / "screenshots"
+                shots = _DATA_ROOT / "screenshots"
                 shots.mkdir(exist_ok=True)
                 fp = shots / f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png"
                 img = pyautogui.screenshot()
@@ -3538,7 +3565,7 @@ def cmd_vision(action: str, params: dict) -> dict:
             return ok(final_reply, {"analysis": vision_analysis, "web_research": ddg_snippets, "provider": provider_used})
 
         # Fallback: Saved screenshot
-        shots = Path(__file__).parent / "screenshots"
+        shots = _DATA_ROOT / "screenshots"
         shots.mkdir(exist_ok=True)
         fp = shots / f"vision_{datetime.now():%Y%m%d_%H%M%S}.jpg"
         fp.write_bytes(buf.getvalue())
@@ -4647,8 +4674,8 @@ def _get_piper_voice():
         return PIPER_VOICE_INSTANCE
     try:
         from piper.voice import PiperVoice
-        model_path = Path(__file__).parent / "models" / "piper" / "hi.onnx"
-        config_path = Path(__file__).parent / "models" / "piper" / "hi.onnx.json"
+        model_path = _APP_ROOT / "models" / "piper" / "hi.onnx"
+        config_path = _APP_ROOT / "models" / "piper" / "hi.onnx.json"
         if model_path.exists():
             PIPER_VOICE_INSTANCE = PiperVoice.load(model_path, config_path if config_path.exists() else None)
             logger.info("Piper TTS offline neural voice model loaded successfully!")

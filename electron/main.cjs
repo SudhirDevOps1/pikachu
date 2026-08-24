@@ -99,8 +99,20 @@ function startPythonBridge() {
       bridgeCwd = path.dirname(devExe);
       console.log(`[pika] Dev-build mode: ${bridgeCmd}`);
     } else {
-      console.warn("[pika] pc_bridge.exe not found — running in DEMO mode.");
-      return;
+      // Fallback: Python script from resources (bundled as extraResource)
+      const fallbackScript = path.join(process.resourcesPath, "pc_bridge.py");
+      const rootScript = path.join(ROOT, "pc_bridge.py");
+      const scriptToUse = fs.existsSync(fallbackScript) ? fallbackScript : (fs.existsSync(rootScript) ? rootScript : null);
+      if (scriptToUse) {
+        console.warn(`[pika] pc_bridge.exe not found — fallback to Python: ${scriptToUse}`);
+        bridgeCmd = resolvePythonExecutable();
+        bridgeArgs = [scriptToUse];
+        bridgeCwd = path.dirname(scriptToUse);
+        console.log(`[pika] Fallback mode: ${bridgeCmd} ${scriptToUse}`);
+      } else {
+        console.warn("[pika] pc_bridge.exe not found — running in DEMO mode.");
+        return;
+      }
     }
   } else {
     // Development mode — Python script
@@ -147,6 +159,35 @@ function startPythonBridge() {
         console.log(`[pika] Auto-restarting bridge (attempt ${bridgeRestartCount}/3)...`);
         setTimeout(() => startPythonBridge(), 2000 * bridgeRestartCount);
       } else if (bridgeRestartCount >= 3) {
+        // After 3 exe crashes, try Python fallback (if we were using exe)
+        const wasExe = bridgeCmd && bridgeCmd.endsWith(".exe");
+        const fallbackScript = path.join(process.resourcesPath, "pc_bridge.py");
+        if (wasExe && fs.existsSync(fallbackScript) && !isQuitting) {
+          console.log("[pika] Exe failed 3 times — trying Python fallback...");
+          bridgeRestartCount = 0;
+          try {
+            const pyCmd = resolvePythonExecutable();
+            bridgeProcess = spawn(pyCmd, [fallbackScript], {
+              cwd: path.dirname(fallbackScript),
+              env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1" },
+              windowsHide: true,
+            });
+            bridgeProcess.stdout.on("data", (d) => {
+              const line = d.toString().trim();
+              if (line) console.log(`[bridge-fallback] ${line}`);
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("bridge:log", line);
+            });
+            bridgeProcess.stderr.on("data", (d) => { console.error(`[bridge-fallback:err] ${d.toString().trim()}`); });
+            bridgeProcess.on("close", (c2) => {
+              console.log(`[pika] Fallback bridge exited code ${c2}`);
+              bridgeProcess = null;
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("bridge:status", { running: false, code: c2, maxRetries: true });
+            });
+            return;
+          } catch (e) {
+            console.error(`[pika] Fallback spawn failed: ${e.message}`);
+          }
+        }
         console.log("[pika] Bridge restart limit reached. Manual restart required.");
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send("bridge:status", { running: false, code, maxRetries: true });
@@ -263,8 +304,11 @@ function createMainWindow() {
   });
 
   // External links default browser mein khulein, app ke andar nahi
+  // Note: about:blank / devtools schemes ko ignore — warna Windows "new app to open this about link" dikhata hai
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (/^https?:/i.test(url)) {
+      shell.openExternal(url);
+    }
     return { action: "deny" };
   });
 

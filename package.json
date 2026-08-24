@@ -42,6 +42,10 @@
       {
         "from": "models",
         "to": "models"
+      },
+      {
+        "from": "pc_bridge.py",
+        "to": "pc_bridge.py"
       }
     ],
     "win": {
