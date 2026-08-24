@@ -756,7 +756,7 @@ def find_installed_app_fast(query: str):
     }
     if q in builtins:
         target = builtins[q]
-        if target.startswith('ms-') or os.path.exists(target) or shutil.which(target):
+        if target.startswith('ms-') or target.startswith('microsoft.') or os.path.exists(target) or shutil.which(target):
             return target
 
     # 2. Check PATH with shutil.which
@@ -1658,15 +1658,47 @@ def cmd_clipboard(action, params):
         return err("pyperclip ज़रूरी है")
     try:
         if action in ("save", "get"):
-            return ok("क्लिपबोर्ड", {"content": pyperclip.paste()})
+            txt = pyperclip.paste()
+            # additive persist history in vault (bina hataye)
+            try:
+                data = load_vault_data() or {}
+                hist = data.setdefault("clipboardHistory", [])
+                if txt and (not hist or hist[-1].get("content") != txt):
+                    hist.append({"content": txt[:2000], "at": datetime.now(timezone.utc).isoformat()})
+                    data["clipboardHistory"] = hist[-50:]
+                    save_vault_data(data)
+            except: pass
+            return ok("क्लिपबोर्ड", {"content": txt})
         if action == "set":
             pyperclip.copy(params.get("text", ""))
+            # also log to vault history
+            try:
+                data = load_vault_data() or {}
+                hist = data.setdefault("clipboardHistory", [])
+                hist.append({"content": str(params.get("text",""))[:2000], "at": datetime.now(timezone.utc).isoformat()})
+                data["clipboardHistory"] = hist[-50:]; save_vault_data(data)
+            except: pass
             return ok("क्लिपबोर्ड सेट।")
         if action == "clear":
             pyperclip.copy("")
+            try:
+                data = load_vault_data() or {}
+                data["clipboardHistory"] = []; save_vault_data(data)
+            except: pass
             return ok("क्लिपबोर्ड क्लियर।")
         if action == "history":
-            return ok("हिस्ट्री", {"items": []})
+            try:
+                data = load_vault_data() or {}
+                hist = data.get("clipboardHistory", [])
+                # also merge live paste as latest if not duplicate
+                try:
+                    cur = pyperclip.paste()
+                    if cur and (not hist or hist[-1].get("content") != cur):
+                        hist = hist[-49:] + [{"content": cur, "at": datetime.now(timezone.utc).isoformat()}]
+                except: pass
+                return ok("हिस्ट्री", {"items": hist[-20:]})
+            except:
+                return ok("हिस्ट्री", {"items": []})
         return err(f"अज्ञात clipboard action: {action}")
     except Exception as e:
         return err(str(e))
@@ -1675,6 +1707,53 @@ def cmd_clipboard(action, params):
 def cmd_screen(action, params):
     try:
         if action == "screenshot":
+            # ── additive window-targeted shot (bina full hataye) ──
+            win_query = str(params.get("window","") or params.get("app","") or params.get("title","") or "").strip()
+            # alias: vscodium/codium/code
+            if win_query:
+                low = win_query.lower()
+                aliases = {"vscodium":"codium","vs codium":"codium","vscode":"code","vs code":"code"}
+                for k,v in aliases.items():
+                    if k in low: win_query = v; low = v
+                # try pygetwindow first
+                try:
+                    if gw:
+                        cand = None
+                        for w in gw.getAllWindows():
+                            t = (w.title or "").lower()
+                            if win_query.lower() in t or t in win_query.lower():
+                                if w.width>50 and w.height>50:
+                                    cand = w; break
+                        # fallback contains codium/code
+                        if not cand and "codium" in low:
+                            for w in gw.getAllWindows():
+                                if "codium" in (w.title or "").lower() or "vscodium" in (w.title or "").lower():
+                                    cand = w; break
+                        if cand:
+                            try: cand.activate()
+                            except: pass
+                            import time as _t; _t.sleep(0.35)
+                            # DPI-aware bbox
+                            x, y, w, h = cand.left, cand.top, cand.width, cand.height
+                            res = screen_peeler(x, y, w, h, do_ocr=bool(params.get("ocr")))
+                            if "error" not in res:
+                                try:
+                                    from PIL import Image
+                                    import io
+                                    img = Image.open(res["path"])
+                                    thumb = img.resize((320, 180))
+                                    buf = io.BytesIO(); thumb.save(buf, format="PNG")
+                                    b64 = base64.b64encode(buf.getvalue()).decode()
+                                    res["thumbnail"] = f"data:image/png;base64,{b64}"
+                                except: pass
+                                # rename file to include window name
+                                try:
+                                    p = Path(res["path"]); np = p.parent / f"{win_query[:12].replace(' ','_')}_{p.name}"
+                                    p.rename(np); res["path"] = str(np)
+                                except: pass
+                                return ok(f"Window '{cand.title[:30]}' screenshot: {res['path']} 📸", res)
+                except Exception as ex:
+                    logger.warning(f"window shot fallback full: {ex}")
             # Use ScreenPeeler for HQ + optional OCR
             do_ocr = params.get("ocr") or params.get("peel") or False
             res = screen_peeler(do_ocr=bool(do_ocr))
@@ -1838,8 +1917,21 @@ def cmd_keyboard(action, params):
 
 def cmd_web(action, params):
     try:
+        # additive block: battery check should not open file:// battery-report.html
+        _q = str(params.get("query","") or params.get("name","") or "").lower()
+        _u = str(params.get("url","") or "").lower()
+        if "battery" in _q or "battery" in _u or "battery-report" in _q or "battery-report" in _u:
+            if "report" in _q or "report" in _u or "file://" in _u:
+                # redirect to info/battery instead of opening html
+                b = psutil.sensors_battery() if psutil else None
+                if b:
+                    return ok(f"बैटरी {int(b.percent)}%{' (charging)' if b.power_plugged else ''} 🔋", {"percent": int(b.percent), "plugged": b.power_plugged})
+                return ok("बैटरी रिपोर्ट के लिए powercfg /batteryreport मैनुअल चलाएं — auto open block किया", {"blocked": True})
         if action == "open_site":
             name = str(params.get("name", "")).lower()
+            # block file:// temp html for battery
+            if name.startswith("file://") and "battery-report" in name:
+                return err("Battery report file open blocked — 'battery check' bolo for percent")
             url = URL_MAP.get(name, name if name.startswith("http") else f"https://{name}")
             webbrowser.open(url)
             return ok(f"{name} खोल रहा हूँ। 🌐")
@@ -1860,18 +1952,32 @@ def cmd_web(action, params):
 
 
 def cmd_calculator(action, params):
-    import ast
+    import ast, math
     import operator as opr
     ops = {ast.Add: opr.add, ast.Sub: opr.sub, ast.Mult: opr.mul,
            ast.Div: opr.truediv, ast.Pow: opr.pow, ast.USub: opr.neg, ast.Mod: opr.mod}
+    funcs = {"sqrt": math.sqrt, "sin": math.sin, "cos": math.cos, "tan": math.tan, "log": math.log, "ln": math.log, "exp": math.exp, "pow": math.pow, "abs": abs, "floor": math.floor, "ceil": math.ceil, "round": round}
 
     def ev(node):
         if isinstance(node, ast.Constant):
             return node.value
+        # also handle older ast.Num for py<3.8 compat
+        if hasattr(ast, "Num") and isinstance(node, ast.Num):
+            return node.n
         if isinstance(node, ast.BinOp):
             return ops[type(node.op)](ev(node.left), ev(node.right))
         if isinstance(node, ast.UnaryOp):
             return ops[type(node.op)](ev(node.operand))
+        if isinstance(node, ast.Call):
+            fn = node.func.id if isinstance(node.func, ast.Name) else ""
+            if fn in funcs:
+                args = [ev(a) for a in node.args]
+                return funcs[fn](*args)
+            raise ValueError(f"unknown func {fn}")
+        if isinstance(node, ast.Name):
+            if node.id == "pi": return math.pi
+            if node.id == "e": return math.e
+            raise ValueError(f"unknown name {node.id}")
         raise ValueError("unsupported")
 
     try:
@@ -1910,16 +2016,25 @@ def cmd_translator(action, params):
         return err(f"अनुवाद विफल: {e}")
 
 
+_WEATHER_CACHE: dict = {}
 def cmd_weather(action, params):
-    loc = params.get("location") or "Delhi"
+    loc = (params.get("location") or "Delhi").strip()
+    # additive 10-min cache (bina hataye)
+    now = __import__("time").time()
+    key = loc.lower()
+    if key in _WEATHER_CACHE and now - _WEATHER_CACHE[key][0] < 600:
+        cached = _WEATHER_CACHE[key][1]
+        return ok(f"{loc} (cached): {cached['temp']}°C, {cached['desc']}", cached)
     try:
         url = f"https://wttr.in/{urllib.parse.quote(loc)}?format=j1"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read().decode())
         cur = data["current_condition"][0]
+        res = {"temp": cur["temp_C"], "desc": cur["weatherDesc"][0]["value"], "humidity": cur["humidity"]}
+        _WEATHER_CACHE[key] = (now, res)
         return ok(f"{loc}: {cur['temp_C']}°C, {cur['weatherDesc'][0]['value']}, नमी {cur['humidity']}%",
-                  {"temp": cur["temp_C"], "desc": cur["weatherDesc"][0]["value"], "humidity": cur["humidity"]})
+                  res)
     except Exception as e:
         return err(f"मौसम नहीं मिला: {e}")
 
@@ -2591,7 +2706,13 @@ SYSTEM_PROMPT = (
     "   • If user speaks/writes in ENGLISH (e.g. 'How does a transformer neural network work?') → Reply in clean, fluent and structured English.\n"
     "2. PERSONALITY & TONE: Warm, witty, proactive like a tech-savvy best friend. Never sound robotic, boring or overly formal.\n"
     "3. BREVITY & QUALITY: Keep chat answers crisp (1-2 emojis max). For coding, deep research, or tutorials, provide clear step-by-step markdown.\n"
-    "4. PC AUTOMATION: You control the user's PC (apps, volume, brightness, screenshots, system telemetry, Obsidian notes, files, web search). Confirm actions with cheerful confidence."
+    "4. PC AUTOMATION: You control the user's PC (apps, volume, brightness, screenshots, system telemetry, Obsidian notes, files, web search). Confirm actions with cheerful confidence.\n"
+    "5. FILE PATHS (HERMES/JARVIS-grade, no hallucination):\n"
+    "   • 'desktop pr' ALWAYS means Desktop/daily_note_YYYY_MM_DD.txt via resolve_path() → C:\\Users\\DELL\\Desktop, NEVER E:\\obsidian or custom vault.\n"
+    "   • '.txt daily note' → files/create_file Desktop/daily_note_YYYY_MM_DD.txt, '.md' → obsidian/read_file, 'camera' → microsoft.windows.camera: via find_installed_app_fast().\n"
+    "   • For cursor: use uia/move {x,y}, uia/click {x,y,monitor}, uia/find_image {image_b64}, uia/find_text {text}, screen/start_recording.\n"
+    "   • Never hallucinate paths; if unsure use files/list Desktop to confirm.\n"
+    "6. SELF-CORRECTION: If tool returns err, explain briefly in user's language and suggest fix, don't spam."
 )
 HISTORY: list = []  # legacy global fallback
 HISTORY_BY_WS: dict = {}  # per-connection isolation
