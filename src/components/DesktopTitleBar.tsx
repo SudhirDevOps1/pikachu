@@ -16,6 +16,7 @@ import { useVoiceApi } from "@/hooks/VoiceContext";
 export function DesktopTitleBar() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [bridgeRunning, setBridgeRunning] = useState(false);
+  const [bridgeStarting, setBridgeStarting] = useState(true);
   const [isMini, setIsMini] = useState(false);
   const addToast = useStore((s) => s.addToast);
   const { toggle } = useVoiceApi();
@@ -25,15 +26,27 @@ export function DesktopTitleBar() {
     desktop.appInfo().then(setInfo).catch(() => {});
     desktop.bridgeStatus().then((s) => setBridgeRunning(s.running)).catch(() => {});
 
+    // Cold-start grace: PyInstaller onefile needs ~12 sec to extract + listen
+    const startingTimer = setTimeout(() => setBridgeStarting(false), 15000);
+    const poll = setInterval(() => {
+      desktop.bridgeStatus().then((s) => {
+        setBridgeRunning(s.running);
+        if (s.running) setBridgeStarting(false);
+      }).catch(() => {});
+    }, 3000);
+
     const offStatus = desktop.onBridgeStatus((d) => {
       setBridgeRunning(d.running);
-      if (!d.running) addToast({ type: "warning", message: "PC Bridge रुक गया — restart करें" });
+      if (d.running) setBridgeStarting(false);
+      // Suppress false alarm during cold start
+      if (!d.running && !bridgeStarting) addToast({ type: "warning", message: "PC Bridge रुक गया — restart करें" });
+      if (!d.running && d.maxRetries) setBridgeStarting(false);
     });
     const offHotkey = desktop.onVoiceHotkey(() => toggle());
     const offMini = desktop.onMiniMode(setIsMini);
 
-    return () => { offStatus(); offHotkey(); offMini(); };
-  }, [addToast, toggle]);
+    return () => { clearTimeout(startingTimer); clearInterval(poll); offStatus(); offHotkey(); offMini(); };
+  }, [addToast, toggle, bridgeStarting]);
 
   if (!isDesktopApp()) return null;
 
@@ -59,12 +72,12 @@ export function DesktopTitleBar() {
         <div className="flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1">
           <motion.span
             className="h-1.5 w-1.5 rounded-full"
-            style={{ background: bridgeRunning ? "#22c55e" : "#ef4444" }}
+            style={{ background: bridgeRunning ? "#22c55e" : bridgeStarting ? "#f59e0b" : "#ef4444" }}
             animate={{ opacity: [0.4, 1, 0.4] }}
             transition={{ duration: 1.6, repeat: Infinity }}
           />
           <span className="text-[9px] font-semibold uppercase tracking-wider text-white/50">
-            {bridgeRunning ? "BRIDGE LIVE" : "BRIDGE OFF"}
+            {bridgeRunning ? "BRIDGE LIVE" : bridgeStarting ? "BRIDGE STARTING…" : "BRIDGE OFF"}
           </span>
           <button
             onClick={async () => {

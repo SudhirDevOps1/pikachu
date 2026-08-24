@@ -172,7 +172,12 @@ function startPythonBridge() {
               env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1" },
               windowsHide: true,
             });
-            bridgeProcess.stdout.on("data", (d) => {
+    // Notify renderer that bridge process spawned (poll will confirm WS listening)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bridge:status", { running: true, starting: true });
+    }
+
+    bridgeProcess.stdout.on("data", (d) => {
               const line = d.toString().trim();
               if (line) console.log(`[bridge-fallback] ${line}`);
               if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("bridge:log", line);
